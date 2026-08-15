@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% set active_nav = 'dashboard' %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>{{ session.display_name or session.email or session.subject }}</h1>
+  <p class="muted small">
+    {{ session.email }} ·
+    role <span class="badge role-{{ session.role }}">{{ session.role }}</span> ·
+    signed in via
+    {% if session.protocol == 'local' %}local account{% else %}
+      <span class="badge">{{ session.protocol|upper }}</span> {{ connection.name if connection else session.source }}
+    {% endif %}
+  </p>
+  {% if role_drifted %}
+  <div class="flash flash-warn" style="margin-top:14px;">
+    The role mapping has changed since you signed in. Your session still carries
+    <strong>{{ session.role }}</strong>, but the current rules would assign
+    <strong>{{ current_role }}</strong>. Sign out and back in to pick up the change.
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Local weather</h3>
+  <div id="weather"><span class="muted">Locating…</span></div>
+  <p class="field-help">
+    The one piece of ordinary application functionality here. Your browser
+    resolves the coordinates; the forecast is fetched server-side so the page
+    needs no external network permission.
+  </p>
+</div>
+
+{% if connection %}
+<div class="card">
+  <h3>Why you have this role</h3>
+  <p class="muted small">
+    Looking for claim <code>{{ claim_lookup.claim }}</code>
+    {% if claim_lookup.found %}
+      — found {{ claim_lookup.values | join(', ') }}
+    {% else %}
+      — <strong>not present in this token.</strong>
+    {% endif %}
+  </p>
+
+  {% if role_trace %}
+  <div>
+    {% for step in role_trace %}
+    <div class="trace-row">
+      <span class="muted">#{{ step.rule }}</span>
+      <span class="mono">{{ step.operator }} "{{ step.value }}"</span>
+      <span>→ {{ step.role }}</span>
+      <span style="margin-left:auto;">
+        {% if step.matched %}
+          <span class="trace-match">matched on "{{ step.matched_on }}"</span>
+        {% else %}
+          <span class="trace-skip">no match</span>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted small">
+    No mapping rules are configured, so everyone gets the default role
+    (<code>{{ connection.default_role }}</code>).
+    <a href="/admin/connections/{{ connection.id }}">Add rules →</a>
+  </p>
+  {% endif %}
+
+  {% if not claim_lookup.found and claim_lookup.available_claims %}
+  <p class="field-help">
+    Claims that <em>are</em> present: {{ claim_lookup.available_claims | join(', ') }}.
+    If group membership should be here, check the token or claims configuration
+    at the provider — many will not emit groups unless asked.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if notable_claims %}
+<div class="card">
+  <h3>Conditional Access signals</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Claim</th><th>Value</th><th>What it tells you</th></tr>
+      {% for claim in notable_claims %}
+      <tr class="claim-row">
+        <td>{{ claim.name }}</td>
+        <td class="mono">{{ claim.value }}</td>
+        <td class="muted">{{ claim.description }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p class="field-help">
+    Recorded source address for this session: <code>{{ session.client_ip or 'unknown' }}</code>.
+    If that does not match the <code>ipaddr</code> claim, the app is probably
+    behind a proxy that is not forwarding the client address.
+  </p>
+</div>
+{% endif %}
+
+{% if connection and connection.protocol == 'oidc' %}
+<div class="card">
+  <h3>Re-test authentication</h3>
+  <p class="muted small">
+    Trigger a fresh authorization request with stronger requirements, without
+    changing the saved connection. Use these to check that a policy actually
+    challenges rather than silently passing.
+  </p>
+  <div class="btn-row">
+    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login">Force re-authentication</a>
+    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login&amp;acr_values=mfa">Request MFA context</a>
+    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=select_account">Pick a different account</a>
+  </div>
+</div>
+{% elif connection and connection.protocol == 'saml' %}
+<div class="card">
+  <h3>Re-test authentication</h3>
+  <div class="btn-row">
+    <a class="btn btn-quiet" href="/auth/saml/{{ connection.slug }}/login?force_authn=1">Force re-authentication (ForceAuthn)</a>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Everything the provider asserted</h3>
+  <pre>{{ claims | pretty_json }}</pre>
+  <p class="field-help">
+    The complete claim set or SAML attribute statement, unmodified. This is
+    what role mapping reads from.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Sign out</h3>
+  <div class="btn-row">
+    <form method="post" action="/logout" class="inline">
+      <button type="submit" class="btn-quiet">Sign out of this app</button>
+    </form>
+    {% if session.protocol != 'local' %}
+    <form method="post" action="/logout" class="inline">
+      <input type="hidden" name="federated" value="1" />
+      <button type="submit">Sign out everywhere (federated)</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if session.protocol != 'local' %}
+  <p class="field-help">
+    A local sign-out leaves your provider session intact, so signing back in
+    completes silently. Federated sign-out ends the session at the provider too —
+    that is the one you want between policy tests.
+  </p>
+  {% endif %}
+</div>
+
+{% if session.role in ('admin', 'power') and recent_events %}
+<div class="card">
+  <h3>Recent activity</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Time</th><th>Event</th><th>Outcome</th><th>Summary</th></tr>
+      {% for event in recent_events %}
+      <tr>
+        <td class="mono">{{ event.at.strftime('%H:%M:%S') }}</td>
+        <td>{{ event.kind }}</td>
+        <td><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
+        <td class="muted">{{ event.summary }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p class="field-help"><a href="/admin/events">Full activity log →</a></p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js"></script>
+{% endblock %}

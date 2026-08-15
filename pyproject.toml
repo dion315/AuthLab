@@ -1,0 +1,67 @@
+[project]
+name = "authlab"
+version = "1.0.0"
+description = "IdP-agnostic test harness for OIDC/OAuth2, SAML 2.0, SCIM 2.0 provisioning, and Conditional Access evaluation."
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "jinja2>=3.1.4",
+    # Form bodies: the SAML POST binding and every HTML form in the admin UI.
+    "python-multipart>=0.0.12",
+    "sqlalchemy>=2.0.36",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    # OIDC via discovery — works against any compliant IdP, no per-vendor code.
+    # Pinned below 2.0: the `authlib.jose` module used for ID token validation
+    # is deprecated in favour of `joserfc` and is scheduled for removal there.
+    "authlib>=1.3.2,<2.0",
+    "httpx>=0.27.2",
+    # SAML 2.0. Requires the xmlsec1 system library — see Dockerfile.
+    "python3-saml>=1.16.0",
+    # Fernet, for encrypting IdP client secrets at rest in the database.
+    "cryptography>=43.0.0",
+    # Local-account password hashing.
+    "argon2-cffi>=23.1.0",
+    "itsdangerous>=2.2.0",
+    "pyjwt>=2.9.0",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2.3"]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["S101"]  # assert is fine in tests
+
+[tool.ruff.lint.flake8-bugbear]
+# Calling these in argument defaults is the documented FastAPI idiom, not the
+# mutable-default bug B008 exists to catch.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Form",
+    "fastapi.Body",
+    "fastapi.Path",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]

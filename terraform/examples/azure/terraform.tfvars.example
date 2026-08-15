@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and fill in.
+# terraform.tfvars is gitignored — it holds secrets.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "eastus"
+
+image           = "myregistry.azurecr.io/authlab:1.0.0"
+registry_server = "myregistry.azurecr.io"
+
+# python -c "import secrets; print(secrets.token_urlsafe(48))"
+app_secret_key = "REPLACE_ME"
+
+bootstrap_admin_email = "admin@authlab.local"
+# Leave empty to have one generated and printed to the container log.
+bootstrap_admin_password = ""
+
+# Leave empty for the first apply. Then set it to the app_url output and apply
+# again so OIDC redirect URIs and the SCIM tenant URL are right.
+base_url_override = ""

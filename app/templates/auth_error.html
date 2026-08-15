@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>{{ title }}</h1>
+  <p>{{ message }}</p>
+
+  {% if detail %}
+  <h3 style="margin-top:20px;">What the provider returned</h3>
+  <pre>{{ detail | pretty_json }}</pre>
+  <p class="field-help">
+    When testing Conditional Access, this block is the result. Provider error
+    codes (for example <code>AADSTS53003</code> for a blocked-by-policy sign-in,
+    or <code>access_denied</code>) identify which control refused the request.
+    The same information is kept under <a href="/admin/events">Activity</a>.
+  </p>
+  {% endif %}
+
+  <div class="btn-row">
+    <a class="btn" href="/login">Back to sign in</a>
+  </div>
+</div>
+{% endblock %}

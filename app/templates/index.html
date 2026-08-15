@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Welcome{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>{{ app_name }}</h1>
+  <p class="muted">
+    A small weather app wrapped around a full authentication stack — OIDC/OAuth 2.0,
+    SAML 2.0, SCIM 2.0 provisioning, and role-based access — so you can point a real
+    identity provider at it and watch exactly what happens.
+  </p>
+  <div class="btn-row">
+    <a class="btn" href="/login">Sign in</a>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Any identity provider</h3>
+    <p class="muted small">
+      OIDC connections are configured by issuer URL and resolved through discovery,
+      so Entra ID, Okta, Auth0, Ping, Keycloak, and Google all work without
+      provider-specific code. SAML connections take an SSO URL and a signing
+      certificate.
+    </p>
+  </div>
+  <div class="card">
+    <h3>Configured at runtime</h3>
+    <p class="muted small">
+      Issuers, secrets, certificates, and claim-to-role rules live in the database
+      and are edited from the admin console. Changing a mapping and retrying a
+      sign-in takes seconds, not a redeploy.
+    </p>
+  </div>
+  <div class="card">
+    <h3>Built to be inspected</h3>
+    <p class="muted small">
+      Every sign-in records what the provider asserted, which rule matched, and what
+      the source address was. Denials are shown with the provider's own error code
+      rather than a generic failure page.
+    </p>
+  </div>
+</div>
+{% endblock %}

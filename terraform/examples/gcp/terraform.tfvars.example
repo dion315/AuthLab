@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars and fill in.
+# terraform.tfvars is gitignored — it holds secrets.
+#
+# Enable the required APIs first:
+#   gcloud services enable run.googleapis.com sqladmin.googleapis.com \
+#       secretmanager.googleapis.com artifactregistry.googleapis.com
+
+project_id = "my-gcp-project"
+region     = "us-central1"
+
+image = "us-central1-docker.pkg.dev/my-gcp-project/authlab/authlab:1.0.0"
+
+# python -c "import secrets; print(secrets.token_urlsafe(48))"
+app_secret_key = "REPLACE_ME"
+
+bootstrap_admin_email = "admin@authlab.local"
+# Leave empty to have one generated and printed to the log.
+bootstrap_admin_password = ""
+
+# Leave empty for the first apply. Then set it to the app_url output and apply
+# again so OIDC redirect URIs and the SCIM tenant URL are right.
+base_url_override = ""

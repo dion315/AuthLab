@@ -1,0 +1,38 @@
+# Secrets — never commit these. The app's whole job is holding IdP credentials.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+certs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Local database
+*.db
+*.sqlite3
+data/
+
+# Terraform — state files contain secrets in plaintext
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

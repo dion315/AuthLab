@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% set active_nav = 'admin' %}
+{% block title %}Test {{ connection.name }}{% endblock %}
+
+{% block content %}
+<h1>{{ connection.name }}</h1>
+<p class="muted small"><a href="/admin/connections/{{ connection.id }}">← Back to connection</a></p>
+
+<div class="card">
+  {% if result.ok %}
+  <div class="flash flash-ok">Configuration looks usable.</div>
+  {% else %}
+  <div class="flash flash-error">{{ result.error or 'The check failed.' }}</div>
+  {% endif %}
+
+  {% if result.protocol == 'oidc' and result.ok %}
+  <div class="table-scroll">
+    <table>
+      <tr><th>Issuer</th><td class="mono">{{ result.issuer }}</td></tr>
+      <tr><th>Authorization endpoint</th><td class="mono">{{ result.authorization_endpoint }}</td></tr>
+      <tr><th>Token endpoint</th><td class="mono">{{ result.token_endpoint }}</td></tr>
+      <tr><th>Userinfo endpoint</th><td class="mono">{{ result.userinfo_endpoint or '— not advertised' }}</td></tr>
+      <tr><th>JWKS</th><td class="mono">{{ result.jwks_uri }}</td></tr>
+      <tr><th>End session endpoint</th>
+        <td class="mono">{{ result.end_session_endpoint or '— not advertised; federated sign-out unavailable' }}</td></tr>
+    </table>
+  </div>
+  <p class="field-help">
+    Register this redirect URI at the provider:
+    <code>{{ result.redirect_uri_to_register }}</code>
+  </p>
+  {% if result.scopes_supported %}
+  <p class="field-help">Scopes advertised: {{ result.scopes_supported | join(', ') }}</p>
+  {% endif %}
+
+  {% elif result.protocol == 'saml' and result.ok %}
+  <div class="table-scroll">
+    <table>
+      <tr><th>SP entity ID</th><td class="mono">{{ result.entity_id }}</td></tr>
+      <tr><th>ACS URL</th><td class="mono">{{ result.acs_url }}</td></tr>
+      <tr><th>Metadata</th><td><a href="{{ result.metadata_url }}">{{ result.metadata_url }}</a></td></tr>
+    </table>
+  </div>
+  <p class="field-help">Generated and validated {{ result.metadata_length }} bytes of SP metadata.</p>
+
+  {% elif result.detail %}
+  <h3>Details</h3>
+  <pre>{{ result.detail | pretty_json }}</pre>
+  {% endif %}
+
+  <div class="btn-row">
+    <a class="btn" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">Try a sign-in</a>
+    <a class="btn btn-quiet" href="/admin/connections/{{ connection.id }}">Edit connection</a>
+  </div>
+</div>
+{% endblock %}

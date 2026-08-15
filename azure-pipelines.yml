@@ -1,0 +1,158 @@
+# Azure DevOps pipeline.
+#
+# Lint and test run before anything is built, and the image is only pushed
+# after both pass. Deployment is a manual stage so a green build never
+# surprises anyone by replacing a running environment mid-test.
+#
+# Set up before first run:
+#   - a Docker Registry service connection      -> registryServiceConnection
+#   - an Azure Resource Manager service connection -> azureServiceConnection
+#   - a variable group or pipeline variable APP_SECRET_KEY (mark it secret)
+
+trigger:
+  branches:
+    include: [main]
+
+pr:
+  branches:
+    include: [main]
+
+variables:
+  pythonVersion: "3.12"
+  imageRepository: "authlab"
+  registryServiceConnection: "authlab-registry"
+  azureServiceConnection: "authlab-azure"
+  containerRegistry: "myregistry.azurecr.io"
+  resourceGroup: "rg-authlab"
+  containerAppName: "authlab-app"
+  tag: "$(Build.BuildId)"
+
+stages:
+  - stage: Verify
+    displayName: Lint and test
+    jobs:
+      - job: PythonChecks
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "$(pythonVersion)"
+
+          - script: |
+              set -euo pipefail
+              # SAML support links against xmlsec1; the wheels for lxml and
+              # xmlsec must be built against the same libxml2, hence --no-binary.
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends \
+                  pkg-config libxml2-dev libxslt1-dev libxmlsec1-dev libxmlsec1-openssl
+              python -m pip install --upgrade pip
+              pip install --no-binary lxml,xmlsec lxml xmlsec
+              pip install -e ".[dev]"
+            displayName: Install dependencies
+
+          - script: ruff check app tests
+            displayName: Lint
+
+          - script: |
+              set -euo pipefail
+              pytest tests -q --junitxml=junit/test-results.xml
+            displayName: Test
+            env:
+              APP_SECRET_KEY: ci-only-key-not-used-for-anything-real-123456
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: "junit/test-results.xml"
+              testRunTitle: "pytest"
+
+      - job: TerraformChecks
+        displayName: Terraform validate
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: "1.9.8"
+
+          - script: terraform fmt -recursive -check -diff
+            workingDirectory: terraform
+            displayName: Format check
+
+          - script: |
+              set -euo pipefail
+              for cloud in azure aws gcp; do
+                echo "--- validating $cloud ---"
+                terraform -chdir="terraform/examples/$cloud" init -backend=false -input=false
+                terraform -chdir="terraform/examples/$cloud" validate
+              done
+            displayName: Validate all three clouds
+
+  - stage: Build
+    displayName: Build and push image
+    dependsOn: Verify
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: BuildImage
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: Docker@2
+            displayName: Build and push
+            inputs:
+              containerRegistry: "$(registryServiceConnection)"
+              repository: "$(imageRepository)"
+              command: buildAndPush
+              Dockerfile: Dockerfile
+              tags: |
+                $(tag)
+                latest
+
+  - stage: Deploy
+    displayName: Deploy to Azure Container Apps
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployContainerApp
+        # Attach approvals to this environment in ADO so deployment is a
+        # deliberate act rather than a side effect of merging.
+        environment: authlab-production
+        pool:
+          vmImage: ubuntu-latest
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: Update revision
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      az containerapp update \
+                        --name "$(containerAppName)" \
+                        --resource-group "$(resourceGroup)" \
+                        --image "$(containerRegistry)/$(imageRepository):$(tag)"
+
+                      FQDN=$(az containerapp show \
+                        --name "$(containerAppName)" \
+                        --resource-group "$(resourceGroup)" \
+                        --query properties.configuration.ingress.fqdn -o tsv)
+
+                      echo "Deployed to https://${FQDN}"
+
+                      # Fail the deployment if the new revision is not serving.
+                      for attempt in $(seq 1 30); do
+                        if curl -fsS "https://${FQDN}/healthz" > /dev/null; then
+                          echo "Health check passed."
+                          exit 0
+                        fi
+                        echo "Waiting for health check (attempt ${attempt}/30)..."
+                        sleep 10
+                      done
+
+                      echo "Health check never passed." >&2
+                      exit 1

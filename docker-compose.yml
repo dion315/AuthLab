@@ -1,0 +1,74 @@
+# Local development.
+#
+# `docker compose up --build` needs nothing else: the app defaults to SQLite in
+# a named volume, so there is no database service to wait for and no connection
+# string to get right.
+#
+# To rehearse the deployed setup against Postgres instead:
+#   docker compose --profile postgres up --build
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Generated once and reused; without this, sessions die on every restart
+      # and stored IdP secrets become unreadable.
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-only-not-a-real-secret-change-me-please}
+      BASE_URL: ${BASE_URL:-http://localhost:8000}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/authlab.db}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@authlab.local}
+      # Leave unset and a random password is generated and printed once to the
+      # container log on first start.
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - authlab-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Optional. Only starts with `--profile postgres`.
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: authlab
+      POSTGRES_PASSWORD: authlab
+      POSTGRES_DB: authlab
+    ports:
+      - "5432:5432"
+    volumes:
+      - authlab-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The app waits for this before starting, so a cold `compose up` does not
+      # race the database's first-boot initialisation.
+      test: ["CMD-SHELL", "pg_isready -U authlab -d authlab"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app-postgres:
+    profiles: ["postgres"]
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-only-not-a-real-secret-change-me-please}
+      BASE_URL: ${BASE_URL:-http://localhost:8000}
+      DATABASE_URL: postgresql+psycopg://authlab:authlab@postgres:5432/authlab
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@authlab.local}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  authlab-data:
+  authlab-pgdata:

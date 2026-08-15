@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}{{ app_name }}{% endblock %} — {{ app_name }}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">{{ app_name }}</a>
+    {% if session %}
+    <nav>
+      <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard</a>
+      {% if session.role in ('admin', 'power') %}
+      <a href="/admin" class="{{ 'active' if active_nav == 'admin' }}">Admin</a>
+      <a href="/admin/scim" class="{{ 'active' if active_nav == 'scim' }}">SCIM</a>
+      <a href="/admin/events" class="{{ 'active' if active_nav == 'events' }}">Activity</a>
+      {% endif %}
+    </nav>
+    <div class="topbar-user">
+      <span class="badge role-{{ session.role }}">{{ session.role }}</span>
+      <span class="muted">{{ session.email or session.subject }}</span>
+      <form method="post" action="/logout" class="inline">
+        <button type="submit" class="btn-quiet">Sign out</button>
+      </form>
+    </div>
+    {% endif %}
+  </header>
+
+  <main class="wrap">
+    {% if message %}<div class="flash flash-ok">{{ message }}</div>{% endif %}
+    {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="wrap muted small">
+    {{ app_name }} — a test harness. Not intended to hold production data.
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% set active_nav = 'admin' %}
+{% block title %}Active sessions{% endblock %}
+
+{% block content %}
+<h1>Active sessions</h1>
+<p class="muted small"><a href="/admin">← Admin console</a></p>
+
+<div class="card">
+  <h3>Why sessions are revocable</h3>
+  <p class="muted small">
+    Sessions are held server-side rather than in a self-contained token, so they
+    can be ended immediately. That is what makes SCIM deprovisioning
+    demonstrable: when a provider deactivates a user, their sessions are revoked
+    on the spot instead of remaining valid until a token happens to expire.
+  </p>
+</div>
+
+<div class="card">
+  {% if sessions %}
+  <div class="table-scroll">
+    <table>
+      <tr><th>Subject</th><th>Role</th><th>Source</th><th>Started</th><th>Expires</th><th>IP</th><th></th></tr>
+      {% for row in sessions %}
+      <tr>
+        <td><strong>{{ row.email or row.subject }}</strong></td>
+        <td><span class="badge role-{{ row.role }}">{{ row.role }}</span></td>
+        <td>
+          <span class="badge">{{ row.protocol|upper }}</span>
+          <span class="muted">{{ row.source }}</span>
+        </td>
+        <td class="mono muted">{{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td class="mono muted">{{ row.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td class="mono muted">{{ row.client_ip or '—' }}</td>
+        <td style="text-align:right;">
+          <form method="post" action="/admin/sessions/{{ row.id }}/revoke" class="inline">
+            <button type="submit" class="btn-quiet">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted small">No active sessions.</p>
+  {% endif %}
+</div>
+{% endblock %}

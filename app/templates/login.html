@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <h1>Sign in</h1>
+  <p class="muted small">Choose an identity provider, or use a local account.</p>
+
+  {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+  {% if connections %}
+  <div class="idp-list">
+    {% for connection in connections %}
+    <a class="idp-button" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">
+      <span>{{ connection.name }}</span>
+      <span class="badge">{{ connection.protocol|upper }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="flash flash-warn">
+    No identity providers are configured yet. Sign in with the local
+    administrator account below, then add one under <strong>Admin →
+    Connections</strong>.
+  </div>
+  {% endif %}
+
+  {% if has_local %}
+  <div class="divider">local account</div>
+
+  <form method="post" action="/auth/local/login">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" autocomplete="username" required />
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required />
+
+    <div class="btn-row">
+      <button type="submit">Sign in</button>
+    </div>
+  </form>
+  <p class="field-help">
+    The local account never goes through an identity provider, so it still works
+    when a Conditional Access policy blocks federated sign-in — which is exactly
+    when you need to get in and change the policy.
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,151 @@
+"""Validated shapes for the protocol settings stored on IdpConnection.config.
+
+The database column is JSON, so these Pydantic models are what stop the admin
+UI writing a connection that cannot possibly work. Validating on write means a
+misconfiguration surfaces as a form error next to the field, rather than as an
+exception in the middle of a redirect to the IdP.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field, field_validator
+
+# Fields encrypted before they touch the database. Keyed by protocol so the
+# admin layer never has to guess which values are sensitive.
+SECRET_FIELDS: dict[str, set[str]] = {
+    "oidc": {"client_secret"},
+    "saml": {"sp_private_key"},
+}
+
+
+class OidcSettings(BaseModel):
+    """OIDC / OAuth 2.0 via discovery.
+
+    Everything here comes from the provider's discovery document, so any
+    compliant IdP works with no vendor-specific code: Entra ID, Okta, Auth0,
+    Ping, Keycloak, Google, Duo. The only value you must find by hand is the
+    issuer URL.
+    """
+
+    issuer: str = Field(default="", description="Issuer URL; /.well-known/openid-configuration is appended")
+    client_id: str = ""
+    client_secret: str = ""
+    scopes: str = "openid profile email"
+    use_pkce: bool = True
+
+    # --- knobs that exist specifically for Conditional Access testing ---
+    # prompt=login forces re-authentication even with a live IdP session, which
+    # is the only way to retest a policy without clearing cookies by hand.
+    prompt: str = ""
+    # Request a specific authentication context — this is how you ask for MFA
+    # explicitly and watch whether the IdP honours or challenges it.
+    acr_values: str = ""
+    # Reject an IdP session older than N seconds. Another re-auth lever.
+    max_age: int | None = None
+    # Raw OIDC "claims" request parameter, used for step-up challenges.
+    claims_request: str = ""
+
+    # Federated sign-out. Without it, "log out" only clears the local session
+    # and the next sign-in is silent, which makes repeat testing painful.
+    federated_logout: bool = True
+
+    # Only for a local test IdP over plain http.
+    allow_insecure_http: bool = False
+
+    @field_validator("issuer")
+    @classmethod
+    def _strip_wellknown(cls, v: str) -> str:
+        # People paste the discovery URL rather than the issuer constantly.
+        v = v.strip().rstrip("/")
+        suffix = "/.well-known/openid-configuration"
+        if v.endswith(suffix):
+            v = v[: -len(suffix)]
+        return v
+
+    @field_validator("prompt")
+    @classmethod
+    def _valid_prompt(cls, v: str) -> str:
+        allowed = {"", "login", "consent", "select_account", "none"}
+        if v not in allowed:
+            raise ValueError(f"prompt must be one of {sorted(allowed)}")
+        return v
+
+
+class SamlSettings(BaseModel):
+    """SAML 2.0 service provider settings.
+
+    Covers Entra ID, Okta, Shibboleth, ADFS, Ping, and Duo. Certificates are
+    accepted as PEM or bare base64 — every IdP exports them differently and
+    normalising here saves a support round-trip.
+    """
+
+    idp_entity_id: str = ""
+    idp_sso_url: str = ""
+    idp_slo_url: str = ""
+    idp_x509_cert: str = ""
+
+    sp_entity_id: str = ""
+    # Optional SP keypair: only needed for signed AuthnRequests or encrypted
+    # assertions. Most test setups do not need it.
+    sp_x509_cert: str = ""
+    sp_private_key: str = ""
+
+    name_id_format: str = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+    want_assertions_signed: bool = True
+    want_response_signed: bool = False
+    sign_authn_requests: bool = False
+
+    # Accept IdP-initiated SAML (no matching AuthnRequest on our side).
+    # Off by default: leaving it on disables replay protection, which is a real
+    # weakness and should be a decision rather than a default.
+    allow_unsolicited: bool = False
+
+    # --- Conditional Access levers ---
+    force_authn: bool = False
+    requested_authn_context: str = ""
+
+    @field_validator("idp_x509_cert", "sp_x509_cert")
+    @classmethod
+    def _normalise_cert(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return v
+        if "BEGIN CERTIFICATE" in v:
+            body = "".join(
+                line.strip()
+                for line in v.splitlines()
+                if line.strip() and "BEGIN CERT" not in line and "END CERT" not in line
+            )
+            return body
+        return "".join(v.split())
+
+
+SETTINGS_MODELS: dict[str, type[BaseModel]] = {
+    "oidc": OidcSettings,
+    "saml": SamlSettings,
+}
+
+
+class RoleRule(BaseModel):
+    """One claim-to-role rule. Evaluated in order, first match wins."""
+
+    operator: str = "equals"  # equals | contains | starts_with | regex
+    value: str = ""
+    role: str = "user"
+
+    @field_validator("operator")
+    @classmethod
+    def _valid_operator(cls, v: str) -> str:
+        allowed = {"equals", "contains", "starts_with", "regex"}
+        if v not in allowed:
+            raise ValueError(f"operator must be one of {sorted(allowed)}")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _valid_role(cls, v: str) -> str:
+        from app.models import ROLES
+
+        if v not in ROLES:
+            raise ValueError(f"role must be one of {sorted(ROLES)}")
+        return v

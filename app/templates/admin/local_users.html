@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set active_nav = 'admin' %}
+{% block title %}Local accounts{% endblock %}
+
+{% block content %}
+<h1>Local accounts</h1>
+<p class="muted small"><a href="/admin">← Admin console</a></p>
+
+<div class="card">
+  <h3>Why these exist</h3>
+  <p class="muted small">
+    Local accounts authenticate against this app directly, with no identity
+    provider involved. When a Conditional Access policy blocks federated
+    sign-in — often the exact outcome you were testing for — a local account is
+    how you get back in to change it.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Accounts</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr>
+      {% for user in users %}
+      <tr>
+        <td>
+          <strong>{{ user.email }}</strong>
+          {% if user.must_change_password %}<br /><span class="badge">generated password — change it</span>{% endif %}
+        </td>
+        <td><span class="badge role-{{ user.role }}">{{ user.role }}</span></td>
+        <td>
+          {% if user.is_active %}<span class="badge ok">active</span>
+          {% else %}<span class="badge denied">disabled</span>{% endif %}
+        </td>
+        <td class="muted">{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else 'never' }}</td>
+        <td style="text-align:right;">
+          <form method="post" action="/admin/users/{{ user.id }}/toggle" class="inline">
+            <button type="submit" class="btn-quiet">{{ 'Disable' if user.is_active else 'Enable' }}</button>
+          </form>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="5">
+          <form method="post" action="/admin/users/{{ user.id }}/password" class="btn-row">
+            <input type="password" name="password" placeholder="New password (min 12 characters)"
+                   autocomplete="new-password" style="max-width:320px;" />
+            <button type="submit" class="btn-quiet">Set password</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Add an account</h3>
+  <form method="post" action="/admin/users">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" required />
+
+    <label for="display_name">Display name</label>
+    <input type="text" id="display_name" name="display_name" />
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="new-password" required />
+    <p class="field-help">Minimum 12 characters. Hashed with Argon2 before storage.</p>
+
+    <label for="role">Role</label>
+    <select id="role" name="role">
+      {% for role in roles %}<option value="{{ role }}">{{ role }}</option>{% endfor %}
+    </select>
+
+    <div class="btn-row"><button type="submit">Create account</button></div>
+  </form>
+</div>
+{% endblock %}
