@@ -1,56 +1,124 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% set active_nav = 'admin' %}
 {% block title %}Test {{ connection.name }}{% endblock %}
 
 {% block content %}
-<h1>{{ connection.name }}</h1>
-<p class="muted small"><a href="/admin/connections/{{ connection.id }}">← Back to connection</a></p>
+<div class="page-header">
+  <p class="breadcrumb"><a href="/admin/connections/{{ connection.id }}">← {{ connection.name }}</a></p>
+  <h1>Configuration check</h1>
+  <p class="lead">
+    What this connection looks like without starting a sign-in. Catching a typo
+    here saves three redirects into a browser flow.
+  </p>
+</div>
 
+{% if result.ok %}
+  {% call ui.alert('ok') %}<p>Configuration looks usable.</p>{% endcall %}
+{% else %}
+  {% call ui.alert('error') %}<p>{{ result.error or 'The check failed.' }}</p>{% endcall %}
+{% endif %}
+
+{% if result.protocol == 'oidc' and result.ok %}
 <div class="card">
-  {% if result.ok %}
-  <div class="flash flash-ok">Configuration looks usable.</div>
-  {% else %}
-  <div class="flash flash-error">{{ result.error or 'The check failed.' }}</div>
+  <h3>What the provider advertises</h3>
+  <dl class="kv">
+    <dt>Issuer</dt><dd class="mono">{{ result.issuer }}</dd>
+    <dt>Authorization endpoint</dt><dd class="mono">{{ result.authorization_endpoint }}</dd>
+    <dt>Token endpoint</dt><dd class="mono">{{ result.token_endpoint }}</dd>
+    <dt>Userinfo endpoint</dt><dd class="mono">{{ result.userinfo_endpoint or '— not advertised' }}</dd>
+    <dt>JWKS</dt><dd class="mono">{{ result.jwks_uri }}</dd>
+    <dt>End session endpoint</dt>
+    <dd class="mono">{{ result.end_session_endpoint or '— not advertised; federated sign-out unavailable' }}</dd>
+    <dt>Client authentication</dt>
+    <dd class="mono">
+      {{ result.client_auth_method }}
+      {% if result.client_assertion %}<span class="badge ok">{{ result.client_assertion }}</span>{% endif %}
+    </dd>
+  </dl>
+
+  {% if result.token_endpoint_auth_methods %}
+  <p class="help">
+    Client authentication methods the provider supports:
+    {{ result.token_endpoint_auth_methods | join(', ') }}.
+    {% if result.client_auth_method not in result.token_endpoint_auth_methods %}
+    <strong>This connection is set to {{ result.client_auth_method }}, which is not
+    in that list</strong> — the token request will probably be refused.
+    {% endif %}
+  </p>
   {% endif %}
 
-  {% if result.protocol == 'oidc' and result.ok %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>Issuer</th><td class="mono">{{ result.issuer }}</td></tr>
-      <tr><th>Authorization endpoint</th><td class="mono">{{ result.authorization_endpoint }}</td></tr>
-      <tr><th>Token endpoint</th><td class="mono">{{ result.token_endpoint }}</td></tr>
-      <tr><th>Userinfo endpoint</th><td class="mono">{{ result.userinfo_endpoint or '— not advertised' }}</td></tr>
-      <tr><th>JWKS</th><td class="mono">{{ result.jwks_uri }}</td></tr>
-      <tr><th>End session endpoint</th>
-        <td class="mono">{{ result.end_session_endpoint or '— not advertised; federated sign-out unavailable' }}</td></tr>
-    </table>
-  </div>
-  <p class="field-help">
+  <p class="help">
     Register this redirect URI at the provider:
     <code>{{ result.redirect_uri_to_register }}</code>
   </p>
   {% if result.scopes_supported %}
-  <p class="field-help">Scopes advertised: {{ result.scopes_supported | join(', ') }}</p>
+  <p class="help">Scopes advertised: {{ result.scopes_supported | join(', ') }}</p>
+  {% endif %}
+</div>
+
+{% elif result.protocol == 'saml' and result.ok %}
+<div class="card">
+  <h3>Service provider</h3>
+  <dl class="kv">
+    <dt>SP entity ID</dt><dd class="mono">{{ result.entity_id }}</dd>
+    <dt>ACS URL</dt><dd class="mono">{{ result.acs_url }}</dd>
+    <dt>Metadata</dt><dd><a href="{{ result.metadata_url }}">{{ result.metadata_url }}</a></dd>
+  </dl>
+  <p class="help">Generated and validated {{ result.metadata_length }} bytes of SP metadata.</p>
+</div>
+
+{% elif result.protocol == 'mtls' %}
+<div class="card">
+  <h3>Certificate acceptance</h3>
+  <dl class="kv">
+    <dt>Header</dt><dd class="mono">{{ result.header_name }} ({{ result.header_format }})</dd>
+    <dt>Identity sources</dt><dd class="mono">{{ result.identity_sources }}</dd>
+    <dt>Sign-in URL</dt><dd class="mono">{{ result.login_url }}</dd>
+    <dt>Inspector</dt><dd class="mono">{{ result.inspect_url }}</dd>
+  </dl>
+
+  {% if result.problems %}
+    {% call ui.alert('warn', 'Problems with the trust store') %}
+    {% for problem in result.problems %}<p>{{ problem }}</p>{% endfor %}
+    {% endcall %}
   {% endif %}
 
-  {% elif result.protocol == 'saml' and result.ok %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>SP entity ID</th><td class="mono">{{ result.entity_id }}</td></tr>
-      <tr><th>ACS URL</th><td class="mono">{{ result.acs_url }}</td></tr>
-      <tr><th>Metadata</th><td><a href="{{ result.metadata_url }}">{{ result.metadata_url }}</a></td></tr>
+  {% if result.anchors %}
+  <h3>Trust anchors</h3>
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>Subject</th><th>Expires</th><th>CA</th><th>SHA-256</th></tr></thead>
+      <tbody>
+        {% for anchor in result.anchors %}
+        <tr>
+          <td data-label="Subject" class="mono">{{ anchor.subject }}</td>
+          <td data-label="Expires" class="mono">
+            {{ anchor.not_after[:10] }}
+            {% if anchor.expired %}<span class="badge badge-danger">expired</span>{% endif %}
+          </td>
+          <td data-label="CA">
+            {% if anchor.is_ca %}<span class="badge ok">yes</span>
+            {% else %}<span class="badge badge-danger">no</span>{% endif %}
+          </td>
+          <td data-label="SHA-256" class="mono">{{ anchor.thumbprint_sha256[:24] }}…</td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
-  <p class="field-help">Generated and validated {{ result.metadata_length }} bytes of SP metadata.</p>
+  {% endif %}
+</div>
 
-  {% elif result.detail %}
+{% elif result.detail %}
+<div class="card">
   <h3>Details</h3>
   <pre>{{ result.detail | pretty_json }}</pre>
-  {% endif %}
+</div>
+{% endif %}
 
-  <div class="btn-row">
-    <a class="btn" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">Try a sign-in</a>
-    <a class="btn btn-quiet" href="/admin/connections/{{ connection.id }}">Edit connection</a>
-  </div>
+<div class="btn-row">
+  <a class="btn" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">Try a sign-in</a>
+  <a class="btn btn-quiet" href="/admin/connections/{{ connection.id }}">Edit connection</a>
 </div>
 {% endblock %}

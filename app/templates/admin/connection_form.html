@@ -1,41 +1,72 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% set active_nav = 'admin' %}
 {% block title %}{{ connection.name if connection else 'New connection' }}{% endblock %}
 
 {% block content %}
-<h1>{{ connection.name if connection else ('New ' ~ protocol|upper ~ ' connection') }}</h1>
-<p class="muted small"><a href="/admin">← Admin console</a></p>
+<div class="page-header">
+  <p class="breadcrumb"><a href="/admin">← Connections</a></p>
+  <h1>{{ connection.name if connection else ('New ' ~ protocol_label ~ ' connection') }}</h1>
+  <p class="lead">{{ protocol_label }}{% if connection %} · <code>{{ connection.slug }}</code>{% endif %}</p>
+</div>
 
 {% if urls %}
 <div class="card">
   <h3>Values to register at your identity provider</h3>
+
   {% if protocol == 'oidc' %}
-  <label for="url-redirect">Redirect URI / callback URL</label>
-  <div class="copyable">
-    <input type="text" id="url-redirect" value="{{ urls.redirect_uri }}" readonly />
-    <button type="button" class="btn-quiet" data-copy-target="url-redirect">Copy</button>
-  </div>
-  <p class="field-help">
-    Must match exactly at the provider, including scheme and any trailing path.
-    It is derived from <code>BASE_URL</code>, so if that is wrong the flow will
-    fail with a redirect-URI mismatch.
-  </p>
-  {% else %}
-  <label for="url-acs">Assertion Consumer Service (ACS) URL</label>
-  <div class="copyable">
-    <input type="text" id="url-acs" value="{{ urls.acs_url }}" readonly />
-    <button type="button" class="btn-quiet" data-copy-target="url-acs">Copy</button>
+  <div class="field">
+    <label for="url-redirect">Redirect URI / callback URL</label>
+    <div class="copyable">
+      <input type="text" id="url-redirect" value="{{ urls.redirect_uri }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="url-redirect">Copy</button>
+    </div>
+    <p class="help">
+      Must match exactly at the provider, including scheme and any trailing path.
+      It is derived from <code>BASE_URL</code>, so if that is wrong the flow fails
+      with a redirect-URI mismatch.
+    </p>
   </div>
 
-  <label for="url-metadata">SP metadata URL</label>
-  <div class="copyable">
-    <input type="text" id="url-metadata" value="{{ urls.metadata_url }}" readonly />
-    <button type="button" class="btn-quiet" data-copy-target="url-metadata">Copy</button>
+  {% elif protocol == 'saml' %}
+  <div class="field">
+    <label for="url-acs">Assertion Consumer Service (ACS) URL</label>
+    <div class="copyable">
+      <input type="text" id="url-acs" value="{{ urls.acs_url }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="url-acs">Copy</button>
+    </div>
   </div>
-  <p class="field-help">
-    Most IdP consoles can import this metadata URL and fill in the entity ID,
-    ACS URL, and NameID format for you.
-  </p>
+  <div class="field">
+    <label for="url-sls">Single Logout (SLS) URL</label>
+    <div class="copyable">
+      <input type="text" id="url-sls" value="{{ urls.sls_url }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="url-sls">Copy</button>
+    </div>
+  </div>
+  <div class="field">
+    <label for="url-metadata">SP metadata URL</label>
+    <div class="copyable">
+      <input type="text" id="url-metadata" value="{{ urls.metadata_url }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="url-metadata">Copy</button>
+    </div>
+    <p class="help">
+      Most IdP consoles can import this metadata URL and fill in the entity ID,
+      ACS URL, and NameID format for you.
+    </p>
+  </div>
+
+  {% else %}
+  <div class="field">
+    <label for="url-inspect">Certificate inspector</label>
+    <div class="copyable">
+      <input type="text" id="url-inspect" value="{{ urls.inspect_url }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="url-inspect">Copy</button>
+    </div>
+    <p class="help">
+      Open this from a browser holding a client certificate to see exactly what
+      arrived and which checks passed, without signing in.
+    </p>
+  </div>
   {% endif %}
 
   <div class="btn-row">
@@ -53,14 +84,18 @@
 
   <div class="card">
     <h3>Basics</h3>
-    <label for="name">Display name</label>
-    <input type="text" id="name" name="name" value="{{ connection.name if connection else '' }}"
-           placeholder="Contoso Entra ID" required />
+    <div class="field">
+      <label for="name">Display name</label>
+      <input type="text" id="name" name="name" value="{{ connection.name if connection else '' }}"
+             placeholder="Contoso Entra ID" required />
+    </div>
 
     {% if not connection %}
-    <label for="slug">Slug</label>
-    <input type="text" id="slug" name="slug" placeholder="contoso-entra" />
-    <p class="field-help">Used in URLs. Generated from the display name if left blank, and fixed afterwards.</p>
+    <div class="field">
+      <label for="slug">Slug</label>
+      <input type="text" id="slug" name="slug" placeholder="contoso-entra" />
+      <p class="help">Used in URLs. Generated from the display name if left blank, and fixed afterwards.</p>
+    </div>
     {% endif %}
 
     <div class="checkbox">
@@ -74,30 +109,28 @@
   <div class="card">
     <h3>OIDC provider</h3>
 
-    <label for="issuer">Issuer URL</label>
-    <input type="text" id="issuer" name="issuer" value="{{ config.issuer }}"
-           placeholder="https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0" />
-    <p class="field-help">
-      Everything else is read from <code>{issuer}/.well-known/openid-configuration</code>.
-      Pasting the full discovery URL works too — the suffix is stripped.
-      Okta: <code>https://&lt;org&gt;.okta.com/oauth2/default</code> ·
-      Google: <code>https://accounts.google.com</code> ·
-      Keycloak: <code>https://&lt;host&gt;/realms/&lt;realm&gt;</code>
-    </p>
+    <div class="field">
+      <label for="issuer">Issuer URL</label>
+      <input type="text" id="issuer" name="issuer" value="{{ config.issuer }}"
+             placeholder="https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0" />
+      <p class="help">
+        Everything else is read from <code>{issuer}/.well-known/openid-configuration</code>.
+        Pasting the full discovery URL works too — the suffix is stripped.
+        Okta: <code>https://&lt;org&gt;.okta.com/oauth2/default</code> ·
+        Google: <code>https://accounts.google.com</code> ·
+        Keycloak: <code>https://&lt;host&gt;/realms/&lt;realm&gt;</code>
+      </p>
+    </div>
 
-    <label for="client_id">Client ID</label>
-    <input type="text" id="client_id" name="client_id" value="{{ config.client_id }}" />
+    <div class="field">
+      <label for="client_id">Client ID</label>
+      <input type="text" id="client_id" name="client_id" value="{{ config.client_id }}" />
+    </div>
 
-    <label for="client_secret">Client secret</label>
-    <input type="password" id="client_secret" name="client_secret"
-           value="{{ config.client_secret }}" autocomplete="new-password" />
-    <p class="field-help">
-      Encrypted before it is stored and never rendered back. Leave as-is to keep
-      the current value. Public clients using PKCE only can leave it empty.
-    </p>
-
-    <label for="scopes">Scopes</label>
-    <input type="text" id="scopes" name="scopes" value="{{ config.scopes }}" />
+    <div class="field">
+      <label for="scopes">Scopes</label>
+      <input type="text" id="scopes" name="scopes" value="{{ config.scopes }}" />
+    </div>
 
     <div class="checkbox">
       <input type="checkbox" id="use_pkce" name="use_pkce" {{ 'checked' if config.use_pkce }} />
@@ -116,60 +149,210 @@
   </div>
 
   <div class="card">
-    <h3>Conditional Access levers</h3>
+    <h3>Client authentication</h3>
     <p class="muted small">
-      Applied to every authorization request from this connection. The dashboard
-      can also apply them per-attempt without changing what is saved here.
+      How this app proves to the token endpoint that it is the registered client.
+      <code>private_key_jwt</code> is the certificate-based option: the provider
+      holds only your public certificate, and no shared secret exists to leak.
     </p>
 
-    <label for="prompt">prompt</label>
-    <select id="prompt" name="prompt">
-      {% for option in ['', 'login', 'consent', 'select_account', 'none'] %}
-      <option value="{{ option }}" {{ 'selected' if config.prompt == option }}>{{ option or '(not sent)' }}</option>
-      {% endfor %}
-    </select>
-    <p class="field-help"><code>login</code> forces re-authentication; <code>none</code> tests silent sign-in and fails loudly if interaction is required.</p>
+    <div class="field">
+      <label for="client_auth_method">Method</label>
+      <select id="client_auth_method" name="client_auth_method">
+        {% for method in client_auth_methods %}
+        <option value="{{ method }}" {{ 'selected' if config.client_auth_method == method }}>{{ method }}</option>
+        {% endfor %}
+      </select>
+      <p class="help">
+        <code>none</code> is a public client — legitimate with PKCE.
+        <code>client_secret_basic</code> sends the secret in an Authorization header
+        rather than the form body; a few providers accept only one of the two.
+      </p>
+    </div>
 
-    <label for="acr_values">acr_values</label>
-    <input type="text" id="acr_values" name="acr_values" value="{{ config.acr_values }}" placeholder="mfa" />
-    <p class="field-help">Requests a specific authentication context — the standard way to ask for MFA explicitly.</p>
+    <div class="field">
+      <label for="client_secret">Client secret</label>
+      <input type="password" id="client_secret" name="client_secret"
+             value="{{ config.client_secret }}" autocomplete="new-password" />
+      <p class="help">
+        Encrypted before it is stored and never rendered back. Leave as-is to keep
+        the current value.
+      </p>
+    </div>
 
-    <label for="max_age">max_age (seconds)</label>
-    <input type="number" id="max_age" name="max_age" value="{{ config.max_age if config.max_age is not none else '' }}" min="0" />
-    <p class="field-help">Rejects an existing provider session older than this, forcing a fresh authentication.</p>
+    <div class="field">
+      <label for="client_certificate">Client certificate (for private_key_jwt)</label>
+      <textarea id="client_certificate" name="client_certificate"
+                placeholder="-----BEGIN CERTIFICATE-----">{{ config.client_certificate }}</textarea>
+      <p class="help">
+        Upload this certificate to your app registration. Only its thumbprint
+        travels in the assertion header — the certificate itself is never sent.
+      </p>
+    </div>
 
-    <label for="claims_request">claims (raw JSON)</label>
-    <textarea id="claims_request" name="claims_request" placeholder='{"id_token":{"acr":{"essential":true,"values":["mfa"]}}}'>{{ config.claims_request }}</textarea>
-    <p class="field-help">Sent as the OIDC <code>claims</code> parameter. Used for step-up challenges.</p>
+    {% if certificates.client_certificate %}
+      {% set described = certificates.client_certificate %}
+      {% if described.ok %}
+      <dl class="kv small">
+        <dt>Subject</dt><dd class="mono">{{ described.subject }}</dd>
+        <dt>Expires</dt>
+        <dd class="mono">
+          {{ described.not_after }}
+          {% if described.expired %}<span class="badge badge-danger">expired</span>
+          {% elif described.days_remaining < 30 %}
+          <span class="badge badge-warn">{{ described.days_remaining }} days left</span>{% endif %}
+        </dd>
+        <dt>SHA-1 thumbprint (x5t)</dt><dd class="mono">{{ described.thumbprint_sha1 }}</dd>
+        <dt>SHA-256 thumbprint</dt><dd class="mono">{{ described.thumbprint_sha256 }}</dd>
+      </dl>
+      {% else %}
+        {% call ui.alert('error') %}<p>{{ described.error }}</p>{% endcall %}
+      {% endif %}
+    {% endif %}
+
+    <div class="field">
+      <label for="client_private_key">Client private key</label>
+      <textarea id="client_private_key" name="client_private_key"
+                placeholder="{{ 'stored — leave blank to keep it' if config.client_private_key else '-----BEGIN PRIVATE KEY-----' }}"></textarea>
+      <p class="help">Encrypted before storage and never rendered back. Leave blank to keep the current value.</p>
+    </div>
+
+    <div class="field">
+      <label for="assertion_audience">Assertion audience (optional)</label>
+      <input type="text" id="assertion_audience" name="assertion_audience"
+             value="{{ config.assertion_audience }}" placeholder="defaults to the token endpoint" />
+      <p class="help">
+        Entra and Okta expect the token endpoint, which is the default. Set this
+        only for a provider that insists on the issuer.
+      </p>
+    </div>
+
+    {% if connection %}
+    <div class="btn-row">
+      <button type="submit" formaction="/admin/connections/{{ connection.id }}/certificates/keypair"
+              formnovalidate class="btn-quiet">
+        Generate a client credential keypair
+      </button>
+    </div>
+    <p class="help">
+      Creates a self-signed certificate and key, stores the key encrypted, and
+      shows the certificate to upload to your app registration. Unsaved edits on
+      this page are discarded.
+    </p>
+    {% endif %}
   </div>
 
-  {% else %}
+  <div class="card">
+    <h3>Authentication requests</h3>
+    <p class="muted small">
+      Applied to every authorization request from this connection. These are
+      things the app <em>asks</em> the provider for — the policy that decides
+      whether to honour them lives at the provider, not here. The dashboard can
+      also apply them per-attempt without changing what is saved.
+    </p>
+
+    <div class="field">
+      <label for="prompt">prompt</label>
+      <select id="prompt" name="prompt">
+        {% for option in ['', 'login', 'consent', 'select_account', 'none'] %}
+        <option value="{{ option }}" {{ 'selected' if config.prompt == option }}>{{ option or '(not sent)' }}</option>
+        {% endfor %}
+      </select>
+      <p class="help">
+        <code>login</code> forces re-authentication; <code>none</code> tests silent
+        sign-in and fails loudly if interaction is required.
+      </p>
+    </div>
+
+    <div class="field">
+      <label for="acr_values">acr_values</label>
+      <input type="text" id="acr_values" name="acr_values" value="{{ config.acr_values }}" placeholder="mfa" />
+      <p class="help">
+        Requests a specific authentication context. <code>mfa</code> is the portable
+        way to ask for a second factor; <code>phr</code> asks for a phishing-resistant
+        method, which is how several providers express "certificate or FIDO2".
+      </p>
+    </div>
+
+    <div class="field">
+      <label for="max_age">max_age (seconds)</label>
+      <input type="number" id="max_age" name="max_age"
+             value="{{ config.max_age if config.max_age is not none else '' }}" min="0" />
+      <p class="help">Rejects an existing provider session older than this, forcing a fresh authentication.</p>
+    </div>
+
+    <div class="field">
+      <label for="claims_request">claims (raw JSON)</label>
+      <textarea id="claims_request" name="claims_request"
+                placeholder='{"id_token":{"acr":{"essential":true,"values":["urn:oasis:names:tc:SAML:2.0:ac:classes:X509"]}}}'>{{ config.claims_request }}</textarea>
+      <p class="help">
+        Sent as the OIDC <code>claims</code> parameter. This is how a step-up
+        challenge and an Entra authentication context request are expressed.
+      </p>
+    </div>
+  </div>
+
+  {% elif protocol == 'saml' %}
   <div class="card">
     <h3>SAML identity provider</h3>
 
-    <label for="idp_entity_id">IdP entity ID / issuer</label>
-    <input type="text" id="idp_entity_id" name="idp_entity_id" value="{{ config.idp_entity_id }}" />
+    <div class="field">
+      <label for="idp_entity_id">IdP entity ID / issuer</label>
+      <input type="text" id="idp_entity_id" name="idp_entity_id" value="{{ config.idp_entity_id }}" />
+    </div>
 
-    <label for="idp_sso_url">IdP single sign-on URL</label>
-    <input type="text" id="idp_sso_url" name="idp_sso_url" value="{{ config.idp_sso_url }}" />
+    <div class="field">
+      <label for="idp_sso_url">IdP single sign-on URL</label>
+      <input type="text" id="idp_sso_url" name="idp_sso_url" value="{{ config.idp_sso_url }}" />
+    </div>
 
-    <label for="idp_slo_url">IdP single logout URL (optional)</label>
-    <input type="text" id="idp_slo_url" name="idp_slo_url" value="{{ config.idp_slo_url }}" />
+    <div class="field">
+      <label for="idp_slo_url">IdP single logout URL (optional)</label>
+      <input type="text" id="idp_slo_url" name="idp_slo_url" value="{{ config.idp_slo_url }}" />
+    </div>
 
-    <label for="idp_x509_cert">IdP signing certificate</label>
-    <textarea id="idp_x509_cert" name="idp_x509_cert">{{ config.idp_x509_cert }}</textarea>
-    <p class="field-help">PEM or bare base64 — both are accepted and normalised. Without this, no assertion can be verified.</p>
+    <div class="field">
+      <label for="idp_x509_cert">IdP signing certificate</label>
+      <textarea id="idp_x509_cert" name="idp_x509_cert">{{ config.idp_x509_cert }}</textarea>
+      <p class="help">PEM or bare base64 — both are accepted and normalised. Without this, no assertion can be verified.</p>
+    </div>
+
+    {% if certificates.idp_signing_certificate %}
+      {% set described = certificates.idp_signing_certificate %}
+      {% if described.ok %}
+        {% if described.expired %}
+          {% call ui.alert('error', 'The IdP signing certificate has expired') %}
+          <p>It expired on {{ described.not_after }}. Every assertion will be rejected until the provider's new certificate is pasted in.</p>
+          {% endcall %}
+        {% elif described.days_remaining < 30 %}
+          {% call ui.alert('warn', 'The IdP signing certificate expires soon') %}
+          <p>{{ described.days_remaining }} days left ({{ described.not_after }}).</p>
+          {% endcall %}
+        {% endif %}
+      <dl class="kv small">
+        <dt>Subject</dt><dd class="mono">{{ described.subject }}</dd>
+        <dt>Expires</dt><dd class="mono">{{ described.not_after }} ({{ described.days_remaining }} days)</dd>
+        <dt>SHA-256 thumbprint</dt><dd class="mono">{{ described.thumbprint_sha256 }}</dd>
+      </dl>
+      {% else %}
+        {% call ui.alert('error') %}<p>{{ described.error }}</p>{% endcall %}
+      {% endif %}
+    {% endif %}
   </div>
 
   <div class="card">
     <h3>Service provider</h3>
 
-    <label for="sp_entity_id">SP entity ID</label>
-    <input type="text" id="sp_entity_id" name="sp_entity_id" value="{{ config.sp_entity_id }}" />
-    <p class="field-help">Defaults to this connection's metadata URL if left blank.</p>
+    <div class="field">
+      <label for="sp_entity_id">SP entity ID</label>
+      <input type="text" id="sp_entity_id" name="sp_entity_id" value="{{ config.sp_entity_id }}" />
+      <p class="help">Defaults to this connection's metadata URL if left blank.</p>
+    </div>
 
-    <label for="name_id_format">NameID format</label>
-    <input type="text" id="name_id_format" name="name_id_format" value="{{ config.name_id_format }}" />
+    <div class="field">
+      <label for="name_id_format">NameID format</label>
+      <input type="text" id="name_id_format" name="name_id_format" value="{{ config.name_id_format }}" />
+    </div>
 
     <div class="checkbox">
       <input type="checkbox" id="want_assertions_signed" name="want_assertions_signed"
@@ -182,19 +365,57 @@
       <label for="want_response_signed">Require the response itself to be signed</label>
     </div>
     <div class="checkbox">
+      <input type="checkbox" id="want_assertions_encrypted" name="want_assertions_encrypted"
+             {{ 'checked' if config.want_assertions_encrypted }} />
+      <label for="want_assertions_encrypted">Require encrypted assertions (needs the SP keypair below)</label>
+    </div>
+    <div class="checkbox">
       <input type="checkbox" id="sign_authn_requests" name="sign_authn_requests"
              {{ 'checked' if config.sign_authn_requests }} />
-      <label for="sign_authn_requests">Sign our AuthnRequests (needs an SP keypair below)</label>
+      <label for="sign_authn_requests">Sign our AuthnRequests (needs the SP keypair below)</label>
     </div>
     <div class="checkbox">
       <input type="checkbox" id="allow_unsolicited" name="allow_unsolicited"
              {{ 'checked' if config.allow_unsolicited }} />
       <label for="allow_unsolicited">Accept IdP-initiated sign-in</label>
     </div>
-    <p class="field-help">
+    <p class="help">
       Accepting unsolicited responses disables <code>InResponseTo</code> checking,
       which is what protects against replay. Enable it only if your provider
       genuinely performs IdP-initiated SSO.
+    </p>
+
+    <div class="field">
+      <label for="sp_x509_cert">SP certificate</label>
+      <textarea id="sp_x509_cert" name="sp_x509_cert">{{ config.sp_x509_cert }}</textarea>
+    </div>
+
+    <div class="field">
+      <label for="sp_private_key">SP private key</label>
+      <textarea id="sp_private_key" name="sp_private_key"
+                placeholder="{{ 'stored — leave blank to keep it' if config.sp_private_key else '-----BEGIN PRIVATE KEY-----' }}"></textarea>
+      <p class="help">Encrypted before storage and never rendered back. Leave blank to keep the current value.</p>
+    </div>
+
+    {% if connection %}
+    <div class="btn-row">
+      <button type="submit" formaction="/admin/connections/{{ connection.id }}/certificates/keypair"
+              formnovalidate class="btn-quiet">
+        Generate an SP keypair
+      </button>
+    </div>
+    <p class="help">
+      Creates a self-signed SP certificate and key. Re-import the SP metadata at
+      your IdP afterwards. Unsaved edits on this page are discarded.
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Authentication requests</h3>
+    <p class="muted small">
+      What the AuthnRequest asks the IdP for. Whether the IdP honours it is
+      decided by its own policy, not here.
     </p>
 
     <div class="checkbox">
@@ -202,101 +423,268 @@
       <label for="force_authn">ForceAuthn — always require a fresh authentication</label>
     </div>
 
-    <label for="requested_authn_context">Requested authentication context (comma separated)</label>
-    <input type="text" id="requested_authn_context" name="requested_authn_context"
-           value="{{ config.requested_authn_context }}"
-           placeholder="urn:oasis:names:tc:SAML:2.0:ac:classes:MultiFactor" />
+    <div class="field">
+      <label for="requested_authn_context">Requested authentication context (comma separated)</label>
+      <input type="text" id="requested_authn_context" name="requested_authn_context"
+             value="{{ config.requested_authn_context }}"
+             placeholder="urn:oasis:names:tc:SAML:2.0:ac:classes:X509" />
+      <p class="help">
+        Certificate contexts: <code>…:X509</code>, <code>…:SmartcardPKI</code>,
+        <code>…:TLSClient</code>. Entra multi-factor:
+        <code>http://schemas.microsoft.com/claims/multipleauthn</code>.
+      </p>
+    </div>
 
-    <label for="sp_x509_cert">SP certificate (optional)</label>
-    <textarea id="sp_x509_cert" name="sp_x509_cert">{{ config.sp_x509_cert }}</textarea>
-
-    <label for="sp_private_key">SP private key (optional)</label>
-    <textarea id="sp_private_key" name="sp_private_key" placeholder="{{ config.sp_private_key }}"></textarea>
-    <p class="field-help">Encrypted before storage and never rendered back. Leave blank to keep the current value.</p>
+    <div class="field">
+      <label for="requested_authn_context_comparison">Comparison</label>
+      <select id="requested_authn_context_comparison" name="requested_authn_context_comparison">
+        {% for option in ['exact', 'minimum', 'maximum', 'better'] %}
+        <option value="{{ option }}"
+                {{ 'selected' if config.requested_authn_context_comparison == option }}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <p class="help">
+        <code>exact</code> demands precisely the context asked for;
+        <code>minimum</code> accepts anything at least as strong.
+      </p>
+    </div>
   </div>
-  {% endif %}
 
+  {% else %}
   <div class="card">
-    <h3>Identity attributes</h3>
-    <p class="muted small">Which claim or assertion attribute to read each value from.</p>
-    <div class="grid">
-      <div>
-        <label for="subject_claim">Subject</label>
-        <input type="text" id="subject_claim" name="subject_claim"
-               value="{{ connection.subject_claim if connection else ('sub' if protocol == 'oidc' else 'nameId') }}" />
-      </div>
-      <div>
-        <label for="email_claim">Email</label>
-        <input type="text" id="email_claim" name="email_claim"
-               value="{{ connection.email_claim if connection else 'email' }}" />
-      </div>
-      <div>
-        <label for="name_claim">Display name</label>
-        <input type="text" id="name_claim" name="name_claim"
-               value="{{ connection.name_claim if connection else 'name' }}" />
-      </div>
+    <h3>How the certificate reaches this app</h3>
+    <p class="muted small">
+      TLS is terminated in front of this app on every platform it deploys to, so
+      the client certificate arrives in a header rather than on the socket. The
+      proxy must both <em>request</em> a certificate from the browser and forward
+      it — and it must strip that header from inbound requests, or anyone could
+      set it themselves.
+    </p>
+
+    <div class="field">
+      <label for="header_name">Header name</label>
+      <input type="text" id="header_name" name="header_name" value="{{ config.header_name }}" />
+      <p class="help">
+        Envoy and Azure Container Apps: <code>x-forwarded-client-cert</code> ·
+        AWS ALB: <code>x-amzn-mtls-clientcert</code> ·
+        nginx: whatever you set from <code>$ssl_client_escaped_cert</code> ·
+        Azure App Service: <code>x-arr-clientcert</code>
+      </p>
+    </div>
+
+    <div class="field">
+      <label for="header_format">Header format</label>
+      <select id="header_format" name="header_format">
+        {% for option in ['auto', 'xfcc', 'pem', 'base64_der'] %}
+        <option value="{{ option }}" {{ 'selected' if config.header_format == option }}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <p class="help">
+        <code>auto</code> detects Envoy's XFCC wrapper, percent-encoded PEM, plain
+        PEM, and bare base64 DER. Pin it only if detection guesses wrong.
+      </p>
     </div>
   </div>
 
   <div class="card">
-    <h3>Role mapping</h3>
-    <label for="role_claim">Claim carrying groups or roles</label>
-    <input type="text" id="role_claim" name="role_claim"
-           value="{{ connection.role_claim if connection else 'roles' }}" />
-    <p class="field-help">
-      Entra: <code>roles</code> for app roles, <code>groups</code> for group ids ·
-      Okta: <code>groups</code> ·
-      Shibboleth: the full attribute URN. Dotted paths work for nested claims.
+    <h3>Trust</h3>
+
+    <div class="field">
+      <label for="trusted_ca_pem">Trusted CA certificates</label>
+      <textarea id="trusted_ca_pem" name="trusted_ca_pem">{{ config.trusted_ca_pem }}</textarea>
+      <p class="help">
+        One or more PEM certificates. A presented certificate must chain to one of
+        these. Intermediates can be included here too.
+      </p>
+    </div>
+
+    {% if certificates.trust_anchors %}
+    <div class="table-wrap">
+      <table class="responsive">
+        <thead><tr><th>Subject</th><th>Expires</th><th>CA</th></tr></thead>
+        <tbody>
+          {% for anchor in certificates.trust_anchors %}
+          <tr>
+            <td data-label="Subject" class="mono">{{ anchor.subject }}</td>
+            <td data-label="Expires" class="mono">
+              {{ anchor.not_after[:10] }}
+              {% if anchor.expired %}<span class="badge badge-danger">expired</span>{% endif %}
+            </td>
+            <td data-label="CA">
+              {% if anchor.is_ca %}<span class="badge ok">yes</span>
+              {% else %}<span class="badge badge-danger">no</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% if certificates.trust_anchors_error %}
+      {% call ui.alert('error') %}<p>{{ certificates.trust_anchors_error }}</p>{% endcall %}
+    {% endif %}
+
+    <div class="field">
+      <label for="crl_pem">Certificate revocation list (optional)</label>
+      <textarea id="crl_pem" name="crl_pem" placeholder="-----BEGIN X509 CRL-----">{{ config.crl_pem }}</textarea>
+      <p class="help">
+        Nothing is fetched over the network and OCSP is not consulted — paste a
+        CRL here to test that a revoked certificate is refused.
+        {% if certificates.crl_count is defined %}
+        Currently listing {{ certificates.crl_count }} revoked
+        certificate{{ '' if certificates.crl_count == 1 else 's' }}.
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="checkbox">
+      <input type="checkbox" id="require_chain" name="require_chain" {{ 'checked' if config.require_chain }} />
+      <label for="require_chain">Require a chain to one of the trusted CAs</label>
+    </div>
+    <div class="checkbox">
+      <input type="checkbox" id="check_validity" name="check_validity" {{ 'checked' if config.check_validity }} />
+      <label for="check_validity">Check the validity period</label>
+    </div>
+    <div class="checkbox">
+      <input type="checkbox" id="require_client_auth_eku" name="require_client_auth_eku"
+             {{ 'checked' if config.require_client_auth_eku }} />
+      <label for="require_client_auth_eku">Require the clientAuth extended key usage</label>
+    </div>
+    <p class="help">
+      Turning any of these off is a legitimate test — seeing an expired or
+      unchained certificate accepted proves the check was the thing rejecting it.
+      Leave them on for anything resembling real use.
     </p>
+
+    <div class="field">
+      <label for="allowed_issuer_cns">Allowed issuer common names (optional, comma separated)</label>
+      <input type="text" id="allowed_issuer_cns" name="allowed_issuer_cns"
+             value="{{ config.allowed_issuer_cns }}" />
+      <p class="help">Empty means any issuer that chains to a trust anchor is acceptable.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Identity binding</h3>
+    <div class="field">
+      <label for="identity_sources">Identity sources, in order</label>
+      <input type="text" id="identity_sources" name="identity_sources" value="{{ config.identity_sources }}" />
+      <p class="help">
+        Comma separated; the first that carries a value names the user. Available:
+        {% for source in identity_sources %}<code>{{ source }}</code>{{ ', ' if not loop.last }}{% endfor %}.
+        A smart card or Entra certificate credential normally carries the username
+        in <code>san_upn</code>.
+      </p>
+    </div>
+
+    <div class="checkbox">
+      <input type="checkbox" id="allow_pasted_certificate" name="allow_pasted_certificate"
+             {{ 'checked' if config.allow_pasted_certificate }} />
+      <label for="allow_pasted_certificate">Allow testing a pasted certificate from this console</label>
+    </div>
+
+    <input type="hidden" name="subject_claim" value="{{ connection.subject_claim if connection else defaults.subject_claim }}" />
+    <input type="hidden" name="email_claim" value="{{ connection.email_claim if connection else defaults.email_claim }}" />
+    <input type="hidden" name="name_claim" value="{{ connection.name_claim if connection else defaults.name_claim }}" />
+  </div>
+  {% endif %}
+
+  {% if protocol != 'mtls' %}
+  <div class="card">
+    <h3>Identity attributes</h3>
+    <p class="muted small">Which claim or assertion attribute to read each value from.</p>
+    <div class="grid-tight">
+      <div class="field">
+        <label for="subject_claim">Subject</label>
+        <input type="text" id="subject_claim" name="subject_claim"
+               value="{{ connection.subject_claim if connection else defaults.subject_claim }}" />
+      </div>
+      <div class="field">
+        <label for="email_claim">Email</label>
+        <input type="text" id="email_claim" name="email_claim"
+               value="{{ connection.email_claim if connection else defaults.email_claim }}" />
+      </div>
+      <div class="field">
+        <label for="name_claim">Display name</label>
+        <input type="text" id="name_claim" name="name_claim"
+               value="{{ connection.name_claim if connection else defaults.name_claim }}" />
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Role mapping</h3>
+    <div class="field">
+      <label for="role_claim">
+        {% if protocol == 'mtls' %}Certificate field carrying the role{% else %}Claim carrying groups or roles{% endif %}
+      </label>
+      <input type="text" id="role_claim" name="role_claim"
+             value="{{ connection.role_claim if connection else defaults.role_claim }}" />
+      <p class="help">
+        {% if protocol == 'mtls' %}
+        Any field from the claims a certificate produces — <code>issuer_cn</code>,
+        <code>subject_ou</code>, <code>san_upn</code>, <code>subject_dn</code>.
+        Issuing CA is the usual choice: one CA per role.
+        {% else %}
+        Entra: <code>roles</code> for app roles, <code>groups</code> for group ids ·
+        Okta: <code>groups</code> ·
+        Shibboleth: the full attribute URN. Dotted paths work for nested claims.
+        {% endif %}
+      </p>
+    </div>
 
     <label>Rules — evaluated in order, first match wins</label>
     <div id="rule-list">
       {% for rule in role_rules %}
-      <div class="rule-row btn-row">
-        <select name="rule_operator">
+      <div class="rule-row">
+        <select name="rule_operator" aria-label="Operator">
           {% for operator in ['equals', 'contains', 'starts_with', 'regex'] %}
           <option value="{{ operator }}" {{ 'selected' if rule.operator == operator }}>{{ operator }}</option>
           {% endfor %}
         </select>
-        <input type="text" name="rule_value" value="{{ rule.value }}" placeholder="SEC-Admins" />
-        <select name="rule_role">
+        <input type="text" name="rule_value" value="{{ rule.value }}" placeholder="SEC-Admins" aria-label="Value" />
+        <select name="rule_role" aria-label="Role">
           {% for role in roles %}
           <option value="{{ role }}" {{ 'selected' if rule.role == role }}>{{ role }}</option>
           {% endfor %}
         </select>
-        <button type="button" class="btn-quiet" data-remove-rule>Remove</button>
+        <button type="button" class="btn-quiet btn-sm" data-remove-rule>Remove</button>
       </div>
       {% endfor %}
     </div>
 
     <template id="rule-template">
-      <div class="rule-row btn-row">
-        <select name="rule_operator">
+      <div class="rule-row">
+        <select name="rule_operator" aria-label="Operator">
           <option value="equals">equals</option>
           <option value="contains">contains</option>
           <option value="starts_with">starts_with</option>
           <option value="regex">regex</option>
         </select>
-        <input type="text" name="rule_value" placeholder="SEC-Admins" />
-        <select name="rule_role">
+        <input type="text" name="rule_value" placeholder="SEC-Admins" aria-label="Value" />
+        <select name="rule_role" aria-label="Role">
           <option value="admin">admin</option>
           <option value="power">power</option>
           <option value="user">user</option>
         </select>
-        <button type="button" class="btn-quiet" data-remove-rule>Remove</button>
+        <button type="button" class="btn-quiet btn-sm" data-remove-rule>Remove</button>
       </div>
     </template>
 
     <div class="btn-row">
-      <button type="button" class="btn-quiet" id="add-rule">Add rule</button>
+      <button type="button" class="btn-quiet btn-sm" id="add-rule">Add rule</button>
     </div>
 
-    <label for="default_role">Default role when nothing matches</label>
-    <select id="default_role" name="default_role">
-      {% for role in roles %}
-      <option value="{{ role }}" {{ 'selected' if (connection.default_role if connection else 'user') == role }}>{{ role }}</option>
-      {% endfor %}
-    </select>
+    <div class="field">
+      <label for="default_role">Default role when nothing matches</label>
+      <select id="default_role" name="default_role">
+        {% for role in roles %}
+        <option value="{{ role }}"
+                {{ 'selected' if (connection.default_role if connection else 'user') == role }}>{{ role }}</option>
+        {% endfor %}
+      </select>
+    </div>
   </div>
 
   <div class="btn-row">
@@ -305,13 +693,91 @@
   </div>
 </form>
 
+{% if connection and protocol == 'mtls' %}
+<div class="card">
+  <h3>Test certificates</h3>
+  <p class="muted small">
+    Certificate authentication cannot be tested without a certificate, and
+    getting one usually means a PKI you do not have. This issues its own, clearly
+    labelled as test material. The CA private key is encrypted at rest; issued
+    certificates are shown once and never stored.
+  </p>
+
+  <form method="post" action="/admin/connections/{{ connection.id }}/certificates/ca">
+    <div class="btn-row btn-row-tight">
+      <button type="submit" class="btn-quiet">
+        {% if certificates.has_ca_key %}Replace the test CA{% else %}Generate a test CA{% endif %}
+      </button>
+    </div>
+    <p class="help">
+      Overwrites the trusted CA list with a newly generated CA. Any certificate
+      issued from the previous one stops being accepted.
+    </p>
+  </form>
+
+  {% if certificates.has_ca_key %}
+  <hr />
+  <form method="post" action="/admin/connections/{{ connection.id }}/certificates/issue">
+    <div class="grid-tight">
+      <div class="field">
+        <label for="common_name">Common name</label>
+        <input type="text" id="common_name" name="common_name" value="Test User" />
+      </div>
+      <div class="field">
+        <label for="upn">UPN (SAN)</label>
+        <input type="text" id="upn" name="upn" placeholder="test.user@example.com" />
+      </div>
+      <div class="field">
+        <label for="email">Email (SAN)</label>
+        <input type="text" id="email" name="email" placeholder="test.user@example.com" />
+      </div>
+      <div class="field">
+        <label for="validity">Validity</label>
+        <select id="validity" name="validity">
+          <option value="valid">Valid for a year</option>
+          <option value="expired">Already expired</option>
+          <option value="future">Not valid yet</option>
+        </select>
+      </div>
+    </div>
+    <div class="btn-row btn-row-tight">
+      <button type="submit">Issue a client certificate</button>
+    </div>
+    <p class="help">
+      The expired and not-yet-valid options exist so you can prove the validity
+      check is the thing rejecting a certificate.
+    </p>
+  </form>
+  {% endif %}
+
+  {% if config.allow_pasted_certificate %}
+  <hr />
+  <form method="post" action="/admin/connections/{{ connection.id }}/certificates/simulate">
+    <div class="field">
+      <label for="certificate_pem">Test a certificate without a proxy</label>
+      <textarea id="certificate_pem" name="certificate_pem"
+                placeholder="-----BEGIN CERTIFICATE-----" required></textarea>
+      <p class="help">
+        Runs the same validation and identity binding a real sign-in would, and
+        shows every check. Nothing is stored and no session is created.
+      </p>
+    </div>
+    <div class="btn-row btn-row-tight">
+      <button type="submit" class="btn-quiet">Run the checks</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if connection %}
 <form method="post" action="/admin/connections/{{ connection.id }}/delete" class="card">
   <h3>Delete</h3>
-  <p class="muted small">Removes this connection. Sessions created through it stay active until they expire or are revoked.</p>
+  <p class="muted small">
+    Removes this connection. Sessions created through it stay active until they
+    expire or are revoked.
+  </p>
   <div class="btn-row"><button type="submit" class="btn-danger">Delete connection</button></div>
 </form>
 {% endif %}
 {% endblock %}
-
-{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

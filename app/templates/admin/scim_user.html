@@ -3,35 +3,35 @@
 {% block title %}{{ scim_user.user_name }}{% endblock %}
 
 {% block content %}
-<h1>{{ scim_user.display_name or scim_user.user_name }}</h1>
-<p class="muted small"><a href="/admin/scim">← SCIM console</a></p>
+<div class="page-header">
+  <p class="breadcrumb"><a href="/admin/scim">← Provisioning</a></p>
+  <h1>{{ scim_user.display_name or scim_user.user_name }}</h1>
+</div>
 
 <div class="card">
   <h3>Stored attributes</h3>
-  <div class="table-scroll">
-    <table>
-      <tr><th>id</th><td class="mono">{{ scim_user.id }}</td></tr>
-      <tr><th>userName</th><td class="mono">{{ scim_user.user_name }}</td></tr>
-      <tr><th>externalId</th><td class="mono">{{ scim_user.external_id or '—' }}</td></tr>
-      <tr><th>Name</th><td>{{ scim_user.given_name }} {{ scim_user.family_name }}</td></tr>
-      <tr><th>Email</th><td>{{ scim_user.email }}</td></tr>
-      <tr><th>Active</th>
-        <td>
-          {% if scim_user.active %}<span class="badge ok">true</span>
-          {% else %}<span class="badge denied">false</span>{% endif %}
-        </td>
-      </tr>
-      <tr><th>Groups</th><td>{{ scim_user.groups | map(attribute='display_name') | join(', ') or '—' }}</td></tr>
-      <tr><th>Created</th><td class="mono">{{ scim_user.created_at }}</td></tr>
-      <tr><th>Updated</th><td class="mono">{{ scim_user.updated_at }}</td></tr>
-    </table>
-  </div>
+  <dl class="kv">
+    <dt>id</dt><dd class="mono">{{ scim_user.id }}</dd>
+    <dt>userName</dt><dd class="mono">{{ scim_user.user_name }}</dd>
+    <dt>externalId</dt><dd class="mono">{{ scim_user.external_id or '—' }}</dd>
+    <dt>Name</dt><dd>{{ scim_user.given_name }} {{ scim_user.family_name }}</dd>
+    <dt>Email</dt><dd>{{ scim_user.email }}</dd>
+    <dt>Active</dt>
+    <dd>
+      {% if scim_user.active %}<span class="badge ok">true</span>
+      {% else %}<span class="badge denied">false</span>{% endif %}
+    </dd>
+    <dt>Groups</dt>
+    <dd>{{ scim_user.groups | map(attribute='display_name') | join(', ') or '—' }}</dd>
+    <dt>Created</dt><dd class="mono">{{ scim_user.created_at }}</dd>
+    <dt>Updated</dt><dd class="mono">{{ scim_user.updated_at }}</dd>
+  </dl>
 </div>
 
 <div class="card">
   <h3>Last payload received</h3>
   <pre>{{ scim_user.raw_payload | pretty_json }}</pre>
-  <p class="field-help">
+  <p class="help">
     Exactly what the provider sent, before any interpretation. When an attribute
     is not landing where you expect, the answer is usually visible here — the
     mapping is sending something other than what you assumed.

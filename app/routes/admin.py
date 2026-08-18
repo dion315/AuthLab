@@ -14,6 +14,7 @@ any of these routes authenticated.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
@@ -23,9 +24,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import events
+from app.auth import certs, mtls, oidc, saml
 from app.auth import connections as conn
-from app.auth import oidc, saml
-from app.auth.schemas import SETTINGS_MODELS
+from app.auth.schemas import (
+    CLIENT_AUTH_METHODS,
+    IDENTITY_SOURCES,
+    PROTOCOL_LABELS,
+    SETTINGS_MODELS,
+    MtlsSettings,
+)
+from app.config import get_settings
 from app.db import get_db
 from app.deps import require_role
 from app.models import (
@@ -46,6 +54,30 @@ admin_only = require_role("admin")
 admin_or_power = require_role("admin", "power")
 
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
+
+# Where each protocol reads identity from by default. Certificate connections
+# take theirs from the certificate itself, so the names are certificate fields
+# rather than claim names.
+CLAIM_DEFAULTS: dict[str, dict[str, str]] = {
+    "oidc": {
+        "subject_claim": "sub",
+        "email_claim": "email",
+        "name_claim": "name",
+        "role_claim": "roles",
+    },
+    "saml": {
+        "subject_claim": "nameId",
+        "email_claim": "email",
+        "name_claim": "name",
+        "role_claim": "groups",
+    },
+    "mtls": {
+        "subject_claim": "identity",
+        "email_claim": "san_email",
+        "name_claim": "subject_cn",
+        "role_claim": "issuer_cn",
+    },
+}
 
 
 def _slugify(value: str) -> str:
@@ -125,7 +157,12 @@ def new_connection_form(
             "session": session,
             "connection": None,
             "protocol": protocol,
+            "protocol_label": PROTOCOL_LABELS[protocol],
             "config": model().model_dump(),
+            "defaults": CLAIM_DEFAULTS[protocol],
+            "identity_sources": IDENTITY_SOURCES,
+            "client_auth_methods": CLIENT_AUTH_METHODS,
+            "certificates": {},
             "role_rules": [],
             "roles": ROLES,
             "urls": {},
@@ -154,16 +191,17 @@ async def create_connection(
             error=f"A connection with the slug '{slug}' already exists",
         )
 
+    fallback = CLAIM_DEFAULTS[protocol]
     connection = IdpConnection(
         slug=slug,
         name=name,
         protocol=protocol,
         enabled=_form_bool(form, "enabled"),
-        role_claim=str(form.get("role_claim", "roles")).strip() or "roles",
+        role_claim=str(form.get("role_claim", "")).strip() or fallback["role_claim"],
         default_role=str(form.get("default_role", "user")),
-        subject_claim=str(form.get("subject_claim", "sub")).strip() or "sub",
-        email_claim=str(form.get("email_claim", "email")).strip() or "email",
-        name_claim=str(form.get("name_claim", "name")).strip() or "name",
+        subject_claim=str(form.get("subject_claim", "")).strip() or fallback["subject_claim"],
+        email_claim=str(form.get("email_claim", "")).strip() or fallback["email_claim"],
+        name_claim=str(form.get("name_claim", "")).strip() or fallback["name_claim"],
         role_rules=_parse_role_rules(form),
         config={},
     )
@@ -205,6 +243,7 @@ def edit_connection_form(
         "acs_url": conn.acs_url(connection.slug),
         "sls_url": conn.sls_url(connection.slug),
         "metadata_url": conn.metadata_url(connection.slug),
+        "inspect_url": conn.mtls_inspect_url(connection.slug),
         "login_url": f"/auth/{connection.protocol}/{connection.slug}/login",
     }
 
@@ -215,7 +254,12 @@ def edit_connection_form(
             "session": session,
             "connection": connection,
             "protocol": connection.protocol,
+            "protocol_label": PROTOCOL_LABELS[connection.protocol],
             "config": conn.redacted_config(connection),
+            "defaults": CLAIM_DEFAULTS[connection.protocol],
+            "identity_sources": IDENTITY_SOURCES,
+            "client_auth_methods": CLIENT_AUTH_METHODS,
+            "certificates": _certificate_diagnostics(connection),
             "role_rules": connection.role_rules or [],
             "roles": ROLES,
             "urls": urls,
@@ -224,6 +268,44 @@ def edit_connection_form(
             "error": request.query_params.get("error", ""),
         },
     )
+
+
+def _certificate_diagnostics(connection: IdpConnection) -> dict[str, Any]:
+    """Describe every certificate on a connection, for display beside its field.
+
+    An expired signing certificate or a trust anchor that is not actually a CA
+    are both invisible in a textarea full of base64, and both produce failures
+    at sign-in time that name neither.
+    """
+    settings_obj = conn.load_settings(connection)
+    described: dict[str, Any] = {}
+
+    if connection.protocol == "saml":
+        return saml.certificate_diagnostics(connection)
+
+    if connection.protocol == "oidc" and getattr(settings_obj, "client_certificate", ""):
+        described["client_certificate"] = certs.describe_pem(settings_obj.client_certificate)
+
+    if connection.protocol == "mtls":
+        assert isinstance(settings_obj, MtlsSettings)
+        if settings_obj.trusted_ca_pem:
+            try:
+                described["trust_anchors"] = [
+                    certs.describe(certificate)
+                    for certificate in certs.load_certificates(settings_obj.trusted_ca_pem)
+                ]
+            except certs.CertificateError as exc:
+                described["trust_anchors_error"] = exc.message
+        if settings_obj.crl_pem:
+            try:
+                described["crl_count"] = sum(
+                    len(list(crl)) for crl in certs.load_crls(settings_obj.crl_pem)
+                )
+            except certs.CertificateError as exc:
+                described["crl_error"] = exc.message
+        described["has_ca_key"] = bool(settings_obj.ca_private_key)
+
+    return described
 
 
 @router.post("/connections/{connection_id}")
@@ -331,10 +413,54 @@ async def test_connection(
                 jwks_uri=document.get("jwks_uri", ""),
                 end_session_endpoint=document.get("end_session_endpoint", ""),
                 scopes_supported=document.get("scopes_supported", []),
+                token_endpoint_auth_methods=document.get(
+                    "token_endpoint_auth_methods_supported", []
+                ),
+                client_auth_method=settings_obj.client_auth_method,  # type: ignore[union-attr]
                 redirect_uri_to_register=conn.redirect_uri(connection.slug),
             )
+            # A client assertion that cannot be built is a configuration error
+            # worth finding here rather than at the token endpoint, where it
+            # comes back as a generic invalid_client.
+            if settings_obj.client_auth_method == "private_key_jwt":  # type: ignore[union-attr]
+                try:
+                    oidc.build_client_assertion(
+                        settings_obj,  # type: ignore[arg-type]
+                        audience=document.get("token_endpoint", ""),
+                    )
+                    result["client_assertion"] = "built and signed successfully"
+                except oidc.OidcError as exc:
+                    result.update(ok=False, error=exc.message)
         except oidc.OidcError as exc:
             result.update(ok=False, error=exc.message, detail=exc.detail)
+    elif connection.protocol == "mtls":
+        settings_obj = conn.load_settings(connection)
+        assert isinstance(settings_obj, MtlsSettings)
+        try:
+            anchors = certs.load_certificates(settings_obj.trusted_ca_pem)
+            problems = [
+                f"'{certs.describe(anchor)['subject']}' is not a CA certificate "
+                "(no basicConstraints CA:TRUE), so nothing can chain to it"
+                for anchor in anchors
+                if not certs.is_certificate_authority(anchor)
+            ]
+            result.update(
+                ok=bool(anchors) or not settings_obj.require_chain,
+                anchors=[certs.describe(anchor) for anchor in anchors],
+                problems=problems,
+                header_name=settings_obj.header_name,
+                header_format=settings_obj.header_format,
+                identity_sources=settings_obj.identity_sources,
+                login_url=conn.mtls_login_url(connection.slug),
+                inspect_url=conn.mtls_inspect_url(connection.slug),
+            )
+            if not anchors and settings_obj.require_chain:
+                result["error"] = (
+                    "This connection requires a chain to a trusted CA but has no CA "
+                    "certificates. Paste one, or generate a test CA below."
+                )
+        except certs.CertificateError as exc:
+            result.update(ok=False, error=exc.message)
     else:
         try:
             xml = saml.build_metadata(connection)
@@ -356,11 +482,285 @@ async def test_connection(
     )
 
 
+# --- certificate tooling -----------------------------------------------------
+#
+# Certificate-based authentication is the one area where "just configure it"
+# runs into a wall: you cannot test it without a certificate, and getting one
+# usually means a PKI you do not have. So the app issues its own test material,
+# clearly labelled as such, and every private key it generates for itself is
+# encrypted before it is stored.
+
+
+def _save_config_values(connection: IdpConnection, values: dict[str, Any]) -> None:
+    """Merge a few settings into a connection without touching the rest.
+
+    Reads back the redacted config so stored secrets stay put — the placeholder
+    means "unchanged" to store_settings, which is exactly what is wanted here.
+    """
+    data = conn.redacted_config(connection)
+    data.update(values)
+    conn.store_settings(connection, data)
+
+
+@router.post("/connections/{connection_id}/certificates/ca")
+def generate_test_ca(
+    connection_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    connection = db.get(IdpConnection, connection_id)
+    if connection is None or connection.protocol != "mtls":
+        return _redirect("/admin", error="Client-certificate connection not found")
+
+    certificate_pem, key_pem = certs.generate_ca(f"AuthLab Test CA ({connection.name})")
+    _save_config_values(
+        connection, {"trusted_ca_pem": certificate_pem, "ca_private_key": key_pem}
+    )
+    db.commit()
+
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok",
+        summary=f"Generated a test CA for '{connection.name}'",
+        request=request,
+        subject=session.email,
+        connection_slug=connection.slug,
+    )
+    return _redirect(
+        f"/admin/connections/{connection_id}",
+        message="Test CA generated. Issue a client certificate below, and point your proxy at this CA.",
+    )
+
+
+@router.post("/connections/{connection_id}/certificates/issue", response_class=HTMLResponse)
+async def issue_test_certificate(
+    connection_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Issue a client certificate from this connection's test CA.
+
+    Nothing is stored: the certificate and key are rendered once, and the
+    PKCS#12 bundle is built on demand from what the page posts back. A test
+    harness has no business keeping a copy of a user credential it minted.
+    """
+    connection = db.get(IdpConnection, connection_id)
+    if connection is None or connection.protocol != "mtls":
+        return _redirect("/admin", error="Client-certificate connection not found")
+
+    settings_obj = conn.load_settings(connection)
+    assert isinstance(settings_obj, MtlsSettings)
+    if not settings_obj.ca_private_key:
+        return _redirect(
+            f"/admin/connections/{connection_id}",
+            error="This connection has no test CA private key. Generate a test CA first.",
+        )
+
+    form = await request.form()
+    common_name = str(form.get("common_name", "")).strip() or "Test User"
+    upn = str(form.get("upn", "")).strip()
+    email = str(form.get("email", "")).strip()
+    validity = str(form.get("validity", "valid"))
+
+    now = datetime.now(UTC)
+    windows = {
+        # Issuing something already dead, or not yet alive, is how you check
+        # that the validity check is actually running.
+        "expired": (now - timedelta(days=400), now - timedelta(days=35)),
+        "future": (now + timedelta(days=30), now + timedelta(days=395)),
+    }
+    not_before, not_after = windows.get(validity, (None, None))
+
+    try:
+        certificate_pem, key_pem = certs.issue_client_certificate(
+            ca_cert_pem=settings_obj.trusted_ca_pem,
+            ca_key_pem=settings_obj.ca_private_key,
+            common_name=common_name,
+            upn=upn,
+            email=email,
+            not_before=not_before,
+            not_after=not_after,
+        )
+    except certs.CertificateError as exc:
+        return _redirect(f"/admin/connections/{connection_id}", error=exc.message)
+
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok",
+        summary=f"Issued a test client certificate for '{common_name}'",
+        request=request,
+        subject=session.email,
+        connection_slug=connection.slug,
+        detail={"common_name": common_name, "upn": upn, "validity": validity},
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "admin/issued_certificate.html",
+        {
+            "session": session,
+            "connection": connection,
+            "certificate_pem": certificate_pem,
+            "key_pem": key_pem,
+            "ca_pem": settings_obj.trusted_ca_pem,
+            "described": certs.describe_pem(certificate_pem),
+            # Shown on screen rather than chosen silently: the operator needs it
+            # to complete the import, and a password nobody can see is useless.
+            "suggested_password": generate_token()[:16],
+        },
+    )
+
+
+@router.post("/certificates/pkcs12")
+async def download_pkcs12(
+    request: Request,
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Bundle a certificate and key into a .p12 for browser or OS import.
+
+    The values are posted back from the page that generated them rather than
+    stored, so this endpoint holds nothing and remembers nothing.
+    """
+    form = await request.form()
+    password = str(form.get("password", "")).strip()
+    if len(password) < 6:
+        return _redirect("/admin", error="A PKCS#12 password of at least 6 characters is required")
+
+    try:
+        payload = certs.to_pkcs12(
+            cert_pem=str(form.get("certificate_pem", "")),
+            key_pem=str(form.get("key_pem", "")),
+            ca_pem=str(form.get("ca_pem", "")),
+            friendly_name=str(form.get("friendly_name", "authlab-test-user")),
+            password=password,
+        )
+    except certs.CertificateError as exc:
+        return _redirect("/admin", error=exc.message)
+
+    filename = _SLUG_RE.sub("-", str(form.get("friendly_name", "authlab")).lower()).strip("-")
+    return Response(
+        content=payload,
+        media_type="application/x-pkcs12",
+        headers={"Content-Disposition": f'attachment; filename="{filename or "authlab"}.p12"'},
+    )
+
+
+@router.post("/connections/{connection_id}/certificates/keypair")
+def generate_connection_keypair(
+    connection_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Generate the SP keypair (SAML) or client credential keypair (OIDC).
+
+    Both are self-signed by design: the provider is given the public
+    certificate directly and trusts it on that basis, so there is no chain for
+    a CA to add anything to.
+    """
+    connection = db.get(IdpConnection, connection_id)
+    if connection is None:
+        return _redirect("/admin", error="Connection not found")
+
+    base = get_settings().base_url.replace("https://", "").replace("http://", "").split("/")[0]
+
+    if connection.protocol == "saml":
+        certificate_pem, key_pem = certs.generate_self_signed(f"AuthLab SP {base}")
+        _save_config_values(
+            connection, {"sp_x509_cert": certificate_pem, "sp_private_key": key_pem}
+        )
+        note = (
+            "SP keypair generated. Re-import the SP metadata at your IdP so it picks up "
+            "the new certificate."
+        )
+    elif connection.protocol == "oidc":
+        certificate_pem, key_pem = certs.generate_self_signed(
+            f"AuthLab client {connection.slug}", client_auth=True
+        )
+        _save_config_values(
+            connection, {"client_certificate": certificate_pem, "client_private_key": key_pem}
+        )
+        note = (
+            "Client credential keypair generated. Upload the certificate shown on this "
+            "page to your app registration, then set client authentication to private_key_jwt."
+        )
+    else:
+        return _redirect(
+            f"/admin/connections/{connection_id}",
+            error="Keypair generation applies to OIDC and SAML connections",
+        )
+
+    db.commit()
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok",
+        summary=f"Generated a keypair for '{connection.name}'",
+        request=request,
+        subject=session.email,
+        connection_slug=connection.slug,
+    )
+    return _redirect(f"/admin/connections/{connection_id}", message=note)
+
+
+@router.post("/connections/{connection_id}/certificates/simulate", response_class=HTMLResponse)
+async def simulate_certificate(
+    connection_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Run a pasted certificate through the full validation pipeline.
+
+    This is what makes certificate authentication testable before a proxy is
+    in front of the app: same code path as a real sign-in, same checks, same
+    identity binding — it simply does not create a session.
+    """
+    connection = db.get(IdpConnection, connection_id)
+    if connection is None or connection.protocol != "mtls":
+        return _redirect("/admin", error="Client-certificate connection not found")
+
+    settings_obj = conn.load_settings(connection)
+    assert isinstance(settings_obj, MtlsSettings)
+    if not settings_obj.allow_pasted_certificate:
+        return _redirect(
+            f"/admin/connections/{connection_id}",
+            error="Pasted-certificate testing is turned off for this connection",
+        )
+
+    form = await request.form()
+    pasted = str(form.get("certificate_pem", "")).strip()
+    try:
+        result = mtls.evaluate(connection, mtls.decode_header_value(pasted, "auto"))
+    except mtls.MtlsError as exc:
+        return _redirect(f"/admin/connections/{connection_id}", error=exc.message)
+
+    return templates.TemplateResponse(
+        request,
+        "mtls_result.html",
+        {
+            "session": session,
+            "connection": connection,
+            "result": result,
+            "simulated": True,
+            "signed_in": True,
+            "header_used": "(pasted into the admin console)",
+            "headers_present": {},
+        },
+    )
+
+
 def _extract_config(form: Any, protocol: str) -> dict[str, Any]:
     """Pull protocol settings out of the submitted form.
 
     Field names match the Pydantic model, so adding a setting means adding it
-    to the model and the template — never here.
+    to the model and the template — never here. Optional integers are read from
+    the annotation rather than by field name, so a second one does not silently
+    arrive as a string.
     """
     model = SETTINGS_MODELS[protocol]
     data: dict[str, Any] = {}
@@ -368,7 +768,7 @@ def _extract_config(form: Any, protocol: str) -> dict[str, Any]:
         raw = form.get(field_name)
         if field.annotation is bool:
             data[field_name] = _form_bool(form, field_name)
-        elif field_name == "max_age":
+        elif field.annotation in (int, int | None):
             text = str(raw or "").strip()
             data[field_name] = int(text) if text.isdigit() else None
         else:

@@ -3,17 +3,20 @@
 {% block title %}Activity{% endblock %}
 
 {% block content %}
-<h1>Activity</h1>
-<p class="muted small">
-  Every sign-in attempt, provisioning call, and configuration change. This is
-  the record of what a policy test actually did.
-</p>
+<div class="page-header">
+  <h1>Activity</h1>
+  <p class="lead">
+    Every sign-in attempt, provisioning call, and configuration change. This is
+    the record of what a policy test actually did — and the only place the
+    provider's own error codes survive after the page that showed them.
+  </p>
+</div>
 
 <div class="card">
-  <div class="btn-row" style="margin-top:0;">
-    <a class="btn {{ 'btn-quiet' if kind }}" href="/admin/events">All</a>
+  <div class="btn-row btn-row-tight">
+    <a class="btn btn-sm {{ 'btn-quiet' if kind }}" href="/admin/events">All</a>
     {% for filter_kind in ['login_success', 'login_failure', 'login_start', 'logout', 'scim_request', 'config_change'] %}
-    <a class="btn {{ '' if kind == filter_kind else 'btn-quiet' }}"
+    <a class="btn btn-sm {{ '' if kind == filter_kind else 'btn-quiet' }}"
        href="/admin/events?kind={{ filter_kind }}">{{ filter_kind }}</a>
     {% endfor %}
   </div>
@@ -21,33 +24,36 @@
 
 <div class="card">
   {% if events %}
-  <div class="table-scroll">
-    <table>
-      <tr>
-        <th>Time</th><th>Event</th><th>Outcome</th><th>Connection</th>
-        <th>Subject</th><th>Source IP</th><th>Summary</th>
-      </tr>
-      {% for event in events %}
-      <tr>
-        <td class="mono">{{ event.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-        <td>{{ event.kind }}</td>
-        <td><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
-        <td class="muted">{{ event.connection_slug or '—' }}</td>
-        <td class="muted">{{ event.subject or '—' }}</td>
-        <td class="mono muted">{{ event.client_ip or '—' }}</td>
-        <td>{{ event.summary }}</td>
-      </tr>
-      {% if event.detail %}
-      <tr>
-        <td></td>
-        <td colspan="6"><pre>{{ event.detail | pretty_json }}</pre></td>
-      </tr>
-      {% endif %}
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr>
+          <th>Time</th><th>Event</th><th>Outcome</th><th>Connection</th>
+          <th>Subject</th><th>Source IP</th><th>Summary</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+        <tr>
+          <td data-label="Time" class="mono">{{ event.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td data-label="Event">{{ event.kind }}</td>
+          <td data-label="Outcome"><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
+          <td data-label="Connection" class="muted">{{ event.connection_slug or '—' }}</td>
+          <td data-label="Subject" class="muted">{{ event.subject or '—' }}</td>
+          <td data-label="Source IP" class="mono muted">{{ event.client_ip or '—' }}</td>
+          <td data-label="Summary">{{ event.summary }}</td>
+        </tr>
+        {% if event.detail %}
+        <tr>
+          <td data-label="Detail" colspan="7"><pre>{{ event.detail | pretty_json }}</pre></td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
     </table>
   </div>
   {% else %}
-  <p class="muted small">Nothing recorded for this filter.</p>
+  <div class="empty">Nothing recorded for this filter.</div>
   {% endif %}
 </div>
 {% endblock %}

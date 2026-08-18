@@ -81,3 +81,24 @@ variable "min_replicas" {
   type        = number
   default     = 0
 }
+
+variable "client_certificate_mode" {
+  description = <<-EOT
+    Whether the ingress requests a client certificate from the browser, which is
+    what makes certificate-based sign-in testable on this deployment.
+
+      ignore   no certificate is requested (default)
+      accept   requested, but a caller without one is still served
+      require  no certificate, no connection — this also blocks local sign-in,
+               so keep a way in before setting it
+
+    Container Apps forwards the certificate as x-forwarded-client-cert.
+  EOT
+  type        = string
+  default     = "ignore"
+
+  validation {
+    condition     = contains(["ignore", "accept", "require"], var.client_certificate_mode)
+    error_message = "client_certificate_mode must be ignore, accept, or require."
+  }
+}

@@ -50,3 +50,15 @@ variable "base_url_override" {
   type        = string
   default     = ""
 }
+
+variable "client_certificate_mode" {
+  description = <<-EOT
+    Request a client certificate at the ingress: ignore, accept, or require.
+    "accept" is what you want for testing — it asks for a certificate but still
+    serves browsers that have none, so local, OIDC, and SAML sign-in keep
+    working. "require" refuses every connection without one, including the
+    local sign-in you would need to undo it.
+  EOT
+  type        = string
+  default     = "ignore"
+}

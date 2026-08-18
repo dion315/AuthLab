@@ -17,8 +17,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
+from onelogin.saml2.logout_request import OneLogin_Saml2_Logout_Request
 from onelogin.saml2.settings import OneLogin_Saml2_Settings
 
+from app.auth import certs
 from app.auth.connections import acs_url, load_settings, sls_url
 from app.auth.schemas import SamlSettings
 from app.config import get_settings
@@ -49,6 +51,15 @@ def build_saml_settings(connection: IdpConnection) -> dict[str, Any]:
             for value in settings.requested_authn_context.split(",")
             if value.strip()
         ]
+
+    # Decrypting an assertion needs the SP private key. Asking for encryption
+    # without one produces a failure at the ACS endpoint that reads like an IdP
+    # problem, so refuse it here where the message can be specific.
+    if settings.want_assertions_encrypted and not settings.sp_private_key:
+        raise SamlError(
+            "This connection requires encrypted assertions but has no SP private key. "
+            "Generate or paste an SP keypair, or turn encryption off."
+        )
 
     return {
         # "strict" enforces signature, destination, and timing checks. Turning
@@ -86,9 +97,10 @@ def build_saml_settings(connection: IdpConnection) -> dict[str, Any]:
             "authnRequestsSigned": settings.sign_authn_requests,
             "wantAssertionsSigned": settings.want_assertions_signed,
             "wantMessagesSigned": settings.want_response_signed,
-            "wantAssertionsEncrypted": False,
+            "wantAssertionsEncrypted": settings.want_assertions_encrypted,
             "wantNameId": True,
             "requestedAuthnContext": requested_context,
+            "requestedAuthnContextComparison": settings.requested_authn_context_comparison,
             "rejectUnsolicitedResponsesWithInResponseTo": not settings.allow_unsolicited,
             "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
             "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
@@ -122,9 +134,20 @@ def build_request_dict(
     }
 
 
-def _auth(connection: IdpConnection, request_data: dict[str, Any]) -> OneLogin_Saml2_Auth:
+def _auth(
+    connection: IdpConnection,
+    request_data: dict[str, Any],
+    *,
+    security_overrides: dict[str, Any] | None = None,
+) -> OneLogin_Saml2_Auth:
+    settings_dict = build_saml_settings(connection)
+    if security_overrides:
+        # Per-attempt only: the saved connection is untouched, which is what
+        # lets the dashboard ask for a stronger authentication context once
+        # without committing to it.
+        settings_dict["security"].update(security_overrides)
     try:
-        return OneLogin_Saml2_Auth(request_data, build_saml_settings(connection))
+        return OneLogin_Saml2_Auth(request_data, settings_dict)
     except Exception as exc:
         raise SamlError(
             f"SAML settings for '{connection.name}' are not usable: {exc}",
@@ -133,12 +156,20 @@ def _auth(connection: IdpConnection, request_data: dict[str, Any]) -> OneLogin_S
 
 
 def build_login_url(
-    connection: IdpConnection, request_data: dict[str, Any], *, force_authn: bool | None = None
+    connection: IdpConnection,
+    request_data: dict[str, Any],
+    *,
+    force_authn: bool | None = None,
+    authn_context: str = "",
 ) -> tuple[str, str]:
     """Return (redirect_url, request_id).
 
     request_id must be stored and presented back at the ACS endpoint so that
     InResponseTo can be validated.
+
+    `authn_context` overrides the saved RequestedAuthnContext for this one
+    attempt — that is how the dashboard asks for a certificate or multi-factor
+    context without editing the connection.
     """
     settings = load_settings(connection)
     assert isinstance(settings, SamlSettings)
@@ -151,7 +182,13 @@ def build_login_url(
             "assertion can be verified."
         )
 
-    auth = _auth(connection, request_data)
+    overrides: dict[str, Any] = {}
+    if authn_context:
+        overrides["requestedAuthnContext"] = [
+            value.strip() for value in authn_context.split(",") if value.strip()
+        ]
+
+    auth = _auth(connection, request_data, security_overrides=overrides)
     url = auth.login(
         force_authn=settings.force_authn if force_authn is None else force_authn,
         set_nameid_policy=bool(settings.name_id_format),
@@ -164,8 +201,8 @@ def process_response(
 ) -> dict[str, Any]:
     """Validate a SAML Response and return the asserted attributes.
 
-    Raises SamlError carrying the underlying reason — for Conditional Access
-    testing the specific validation failure is the result you came for.
+    Raises SamlError carrying the underlying reason — when you are testing an
+    access policy, the specific validation failure is the result you came for.
     """
     settings = load_settings(connection)
     assert isinstance(settings, SamlSettings)
@@ -222,12 +259,94 @@ def build_metadata(connection: IdpConnection) -> str:
     SAML setup.
     """
     settings_dict = build_saml_settings(connection)
-    saml_settings = OneLogin_Saml2_Settings(settings_dict, sp_validation_only=True)
+    try:
+        saml_settings = OneLogin_Saml2_Settings(settings_dict, sp_validation_only=True)
+    except Exception as exc:
+        # python3-saml raises its own error type for an unusable SP block — most
+        # often because BASE_URL is not a URL it will accept, which makes the ACS
+        # and SLS URLs invalid. Converted here so the caller renders a page
+        # naming the cause instead of a 500 that names nothing.
+        raise SamlError(
+            f"SP settings are not usable: {exc}. Check that BASE_URL is the "
+            f"externally visible URL of this app; it is currently "
+            f"'{get_settings().base_url}'.",
+            detail={"reason": str(exc), "acs_url": acs_url(connection.slug)},
+        ) from exc
+
     metadata = saml_settings.get_sp_metadata()
     errors = saml_settings.validate_metadata(metadata)
     if errors:
         raise SamlError("Generated SP metadata is invalid: " + ", ".join(errors))
     return metadata.decode("utf-8") if isinstance(metadata, bytes) else metadata
+
+
+def certificate_diagnostics(connection: IdpConnection) -> dict[str, Any]:
+    """Describe the certificates on a SAML connection.
+
+    An expired IdP signing certificate is one of the most common causes of a
+    sign-in that worked yesterday and does not today, and the error a provider
+    returns for it rarely says so. Showing the dates next to the field turns a
+    half-hour of confusion into a glance.
+    """
+    settings = load_settings(connection)
+    assert isinstance(settings, SamlSettings)
+    diagnostics: dict[str, Any] = {}
+    if settings.idp_x509_cert:
+        diagnostics["idp_signing_certificate"] = certs.describe_pem(settings.idp_x509_cert)
+    if settings.sp_x509_cert:
+        diagnostics["sp_certificate"] = certs.describe_pem(settings.sp_x509_cert)
+    return diagnostics
+
+
+def logout_request_nameid(request_data: dict[str, Any]) -> str:
+    """NameID out of an inbound LogoutRequest, or "" if it cannot be read.
+
+    Used to end the right user's sessions on IdP-initiated logout. Best effort:
+    the request has already been validated by process_logout at this point, so
+    failing to read the NameID costs us a nicety, not a security property.
+    """
+    encoded = request_data.get("get_data", {}).get("SAMLRequest") or request_data.get(
+        "post_data", {}
+    ).get("SAMLRequest")
+    if not encoded:
+        return ""
+    try:
+        return OneLogin_Saml2_Logout_Request.get_nameid(encoded) or ""
+    except Exception:  # noqa: BLE001 — any parse failure just means "unknown"
+        return ""
+
+
+def process_logout(
+    connection: IdpConnection, request_data: dict[str, Any], *, request_id: str | None = None
+) -> str:
+    """Handle a message at the SLS endpoint.
+
+    Two different messages arrive here and both have to work:
+
+      * a LogoutResponse, closing out a sign-out this app started. Returns "".
+      * a LogoutRequest, because the user signed out at the provider and it is
+        telling every service provider to do the same. Returns the URL to
+        redirect to, carrying our LogoutResponse.
+
+    Advertising an SLS endpoint in SP metadata and then not implementing it
+    leaves the user on a 404 at the end of a federated sign-out, which looks
+    exactly like a broken logout.
+    """
+    auth = _auth(connection, request_data)
+    try:
+        url = auth.process_slo(keep_local_session=True, request_id=request_id)
+    except Exception as exc:
+        raise SamlError(
+            f"Could not process the SAML logout message: {exc}", detail={"reason": str(exc)}
+        ) from exc
+
+    errors = auth.get_errors()
+    if errors:
+        raise SamlError(
+            "SAML logout message rejected: " + ", ".join(errors),
+            detail={"errors": errors, "reason": auth.get_last_error_reason() or ""},
+        )
+    return url or ""
 
 
 def build_logout_url(

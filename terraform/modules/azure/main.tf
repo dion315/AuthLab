@@ -183,6 +183,17 @@ resource "azurerm_container_app" "app" {
     external_enabled = true
     target_port      = 8000
     transport        = "auto"
+
+    # Certificate-based authentication needs the ingress to ask the browser for
+    # a client certificate and forward it. Container Apps runs Envoy, so the
+    # certificate arrives as x-forwarded-client-cert — which is the default
+    # header name on a client-certificate connection in the app.
+    #
+    # "accept" asks for a certificate but still serves callers without one,
+    # which is what you want here: local sign-in and the OIDC and SAML flows
+    # have to keep working from a browser holding no certificate.
+    client_certificate_mode = var.client_certificate_mode
+
     traffic_weight {
       percentage      = 100
       latest_revision = true

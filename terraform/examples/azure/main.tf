@@ -35,6 +35,10 @@ module "authlab" {
   # First apply: leave empty. Then set it to the app_url output and apply
   # again so redirect URIs and the SCIM tenant URL are correct.
   base_url_override = var.base_url_override
+
+  # Ask the browser for a client certificate, so certificate-based sign-in
+  # can be tested against this deployment. "ignore" by default.
+  client_certificate_mode = var.client_certificate_mode
 }
 
 output "app_url" { value = module.authlab.app_url }

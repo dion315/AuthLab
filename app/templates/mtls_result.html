@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set active_nav = 'admin' %}
+{% block title %}Client certificate{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  {% if simulated %}
+  <p class="breadcrumb"><a href="/admin/connections/{{ connection.id }}">← {{ connection.name }}</a></p>
+  {% endif %}
+  <h1>Client certificate</h1>
+  <p class="lead">
+    Connection <strong>{{ connection.name }}</strong>
+    {% if simulated %}· pasted certificate, no session created
+    {% elif inspect_only %}· inspection only, no session created{% endif %}
+  </p>
+</div>
+
+<div class="verdict {% if result.accepted %}verdict-ok{% else %}verdict-fail{% endif %}">
+  <div class="verdict-icon">
+    {%- if result.accepted %}{{ ui.icon('check') }}{% else %}{{ ui.icon('x') }}{% endif -%}
+  </div>
+  <div>
+    <h2>
+      {%- if result.accepted %}Certificate accepted
+      {%- elif not result.certificate %}No certificate presented
+      {%- else %}Certificate rejected{% endif -%}
+    </h2>
+    <p>
+      {%- if result.accepted %}
+        Signing in with this certificate identifies
+        <strong>{{ result.identity }}</strong> (from <code>{{ result.identity_source }}</code>).
+      {%- else %}
+        {{ result.reason }}
+      {%- endif %}
+    </p>
+  </div>
+</div>
+
+{% if not result.certificate %}
+<div class="card">
+  <h3>Where the certificate should have come from</h3>
+  <p class="muted small">
+    This app never sees the TLS handshake — something in front of it terminates
+    TLS and has to forward the client certificate in a header. Nothing arrived
+    under <code>{{ header_used }}</code>.
+  </p>
+  {% if headers_present %}
+  <p class="muted small">Certificate headers that <em>did</em> arrive:</p>
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>Header</th><th>Length</th></tr></thead>
+      <tbody>
+        {% for name, length in headers_present.items() %}
+        <tr>
+          <td data-label="Header" class="mono">{{ name }}</td>
+          <td data-label="Length" class="mono">{{ length }} bytes</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="help">
+    Point this connection's header name at one of those, or reconfigure the proxy.
+  </p>
+  {% else %}
+  <p class="help">
+    None of the headers this app knows about arrived at all. The usual cause is a
+    proxy that was never told to <em>request</em> a client certificate: Envoy and
+    Azure Container Apps need client certificates enabled on the ingress, nginx
+    needs <code>ssl_verify_client optional</code>, and an AWS load balancer needs
+    mutual TLS switched on for the listener.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if result.checks %}
+<div class="card">
+  <h3>Checks</h3>
+  <div>
+    {% for check in result.checks %}
+    <div class="check {% if check.passed %}check-pass{% else %}check-fail{% endif %}">
+      <span class="check-mark">{% if check.passed %}✓{% else %}✕{% endif %}</span>
+      <div class="check-body">
+        <div class="check-name">{{ check.name }}</div>
+        <div class="check-detail">{{ check.detail }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="help">
+    Revocation is only checked against a CRL pasted into this connection —
+    nothing is fetched over the network, and OCSP is not consulted.
+  </p>
+</div>
+{% endif %}
+
+{% if result.certificate %}
+<div class="card">
+  <h3>Certificate</h3>
+  <dl class="kv">
+    <dt>Subject</dt><dd class="mono">{{ result.certificate.subject }}</dd>
+    <dt>Issuer</dt><dd class="mono">{{ result.certificate.issuer }}</dd>
+    <dt>Serial number</dt><dd class="mono">{{ result.certificate.serial_number }}</dd>
+    <dt>Valid from</dt><dd class="mono">{{ result.certificate.not_before }}</dd>
+    <dt>Valid to</dt>
+    <dd class="mono">
+      {{ result.certificate.not_after }}
+      {% if result.certificate.expired %}<span class="badge badge-danger">expired</span>
+      {% elif result.certificate.days_remaining < 30 %}
+      <span class="badge badge-warn">{{ result.certificate.days_remaining }} days left</span>
+      {% endif %}
+    </dd>
+    <dt>Public key</dt><dd class="mono">{{ result.certificate.public_key }}</dd>
+    <dt>Signature</dt><dd class="mono">{{ result.certificate.signature_algorithm }}</dd>
+    {% if result.certificate.san_upn %}
+    <dt>SAN — UPN</dt><dd class="mono">{{ result.certificate.san_upn | join(', ') }}</dd>
+    {% endif %}
+    {% if result.certificate.san_email %}
+    <dt>SAN — email</dt><dd class="mono">{{ result.certificate.san_email | join(', ') }}</dd>
+    {% endif %}
+    {% if result.certificate.san_dns %}
+    <dt>SAN — DNS</dt><dd class="mono">{{ result.certificate.san_dns | join(', ') }}</dd>
+    {% endif %}
+    <dt>Key usage</dt>
+    <dd class="mono">{{ result.certificate.key_usage | join(', ') or 'not asserted' }}</dd>
+    <dt>Extended key usage</dt>
+    <dd class="mono">{{ result.certificate.extended_key_usage | join(', ') or 'not asserted' }}</dd>
+    <dt>SHA-256 thumbprint</dt><dd class="mono">{{ result.certificate.thumbprint_sha256 }}</dd>
+    <dt>SHA-1 thumbprint</dt><dd class="mono">{{ result.certificate.thumbprint_sha1 }}</dd>
+    <dt>Presented in</dt><dd class="mono">{{ header_used }}</dd>
+  </dl>
+</div>
+
+{% if result.chain %}
+<div class="card">
+  <h3>Chain</h3>
+  <ol class="muted small">
+    {% for subject in result.chain %}
+    <li class="mono">{{ subject }}</li>
+    {% endfor %}
+  </ol>
+  {% if result.anchor %}
+  <p class="help">Anchored at <code>{{ result.anchor }}</code>.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if result.claims %}
+<div class="card">
+  <h3>Claims this certificate produces</h3>
+  <p class="muted small">
+    What role mapping reads from, and what the dashboard shows after a successful
+    certificate sign-in.
+  </p>
+  <pre>{{ result.claims | pretty_json }}</pre>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="btn-row">
+  {% if result.accepted and not simulated %}
+  <a class="btn" href="/auth/mtls/{{ connection.slug }}/login">Sign in with this certificate</a>
+  {% endif %}
+  {% if simulated %}
+  <a class="btn btn-quiet" href="/admin/connections/{{ connection.id }}">Back to the connection</a>
+  {% else %}
+  <a class="btn btn-quiet" href="/login">Back to sign in</a>
+  {% endif %}
+</div>
+{% endblock %}

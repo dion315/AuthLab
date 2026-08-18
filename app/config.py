@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # Behind a cloud load balancer (Container Apps, App Runner, Cloud Run) the
     # client IP and original scheme only exist in X-Forwarded-* headers. Source
-    # IP is a Conditional Access policy condition, so getting this wrong makes
+    # IP is a condition in every access policy engine, so getting this wrong makes
     # the app lie to you about where a sign-in came from.
     trust_proxy_headers: bool = True
 

@@ -3,13 +3,14 @@
 The weather itself is trivial — it exists so there is something real behind the
 sign-in, rather than a page that says "you are logged in". Everything else on
 the dashboard is there to answer the questions you actually have while testing:
-what did the IdP assert, why did that produce this role, and what happens if I
-ask for a stronger authentication context.
+what did the provider assert, why did that produce this role, and what happens
+if I ask for a stronger authentication context.
 """
 
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -17,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app import events
+from app.auth import authn_methods
 from app.auth import connections as conn
 from app.auth.rolemap import describe_claim_lookup, resolve_role
 from app.db import get_db
@@ -26,26 +28,91 @@ from app.templating import templates
 
 router = APIRouter()
 
-# Claims worth calling out when evaluating a Conditional Access policy. The
-# names are OIDC/Entra conventions; SAML equivalents are matched where they
-# exist. Anything not in this list still shows in the full claim dump.
-NOTABLE_CLAIMS: dict[str, str] = {
-    "amr": "Authentication methods actually used (e.g. pwd, mfa, fido). The claim an MFA policy changes.",
-    "acr": "Authentication context class. '1' typically means single-factor.",
-    "acrs": "Authentication context classes the token satisfies (Entra: step-up support).",
-    "authnContextClassRef": "SAML equivalent of acr — the authentication context the IdP asserted.",
-    "auth_time": "When the user actually authenticated, as opposed to when this token was issued.",
-    "ipaddr": "Source IP as the IdP saw it. Compare with the address recorded below.",
-    "tid": "Tenant/directory the user signed in from.",
-    "oid": "Immutable object id for the user in the directory.",
-    "sub": "Subject identifier — unique per user per application.",
-    "groups": "Group memberships, when the IdP is configured to emit them.",
-    "roles": "Application roles assigned in the IdP.",
-    "wids": "Directory role template ids (Entra).",
-    "deviceid": "Device identifier — present when the device is registered/compliant.",
-    "xms_cc": "Client capabilities, including whether the client can handle a claims challenge.",
-    "sid": "Session identifier at the IdP, used for federated sign-out.",
-}
+# Per-attempt authentication requests. None of these change the saved
+# connection — each one starts a single sign-in with stronger requirements, so
+# you can see whether the provider's policy actually challenges or quietly
+# passes. The parameters are standard OIDC; whether a given provider honours
+# them is exactly what you are testing.
+OIDC_RETEST_PRESETS: list[dict[str, str]] = [
+    {
+        "label": "Force re-authentication",
+        "query": "prompt=login",
+        "help": "prompt=login — ignore any live session at the provider.",
+    },
+    {
+        "label": "Require a fresh sign-in",
+        "query": "max_age=0",
+        "help": "max_age=0 — reject any prior authentication, however recent.",
+    },
+    {
+        "label": "Request multi-factor",
+        "query": "prompt=login&acr_values=mfa",
+        "help": "acr_values=mfa — the portable way to ask for a second factor.",
+    },
+    {
+        "label": "Request phishing-resistant",
+        "query": "prompt=login&acr_values=phr",
+        "help": "acr_values=phr — Okta and several others map this to FIDO2 or certificate.",
+    },
+    {
+        "label": "Request a certificate context",
+        "query": (
+            "prompt=login&claims="
+            + quote(
+                '{"id_token":{"acr":{"essential":true,"values":'
+                '["urn:oasis:names:tc:SAML:2.0:ac:classes:X509",'
+                '"urn:oasis:names:tc:SAML:2.0:ac:classes:SmartcardPKI"]}}}',
+                safe="",
+            )
+        ),
+        "help": "A claims request for an X.509 authentication context.",
+    },
+    {
+        "label": "Entra authentication context c1",
+        "query": (
+            "prompt=login&claims="
+            + quote('{"access_token":{"acrs":{"essential":true,"value":"c1"}}}', safe="")
+        ),
+        "help": (
+            "Entra ID step-up: asks for authentication context c1. Map c1 to an "
+            "authentication strength (certificate, phishing-resistant) in Conditional "
+            "Access at the provider first, or Entra will reject the request."
+        ),
+    },
+    {
+        "label": "Pick a different account",
+        "query": "prompt=select_account",
+        "help": "prompt=select_account — useful when several accounts share a browser.",
+    },
+]
+
+SAML_RETEST_PRESETS: list[dict[str, str]] = [
+    {
+        "label": "Force re-authentication",
+        "query": "force_authn=1",
+        "help": "ForceAuthn=true in the AuthnRequest.",
+    },
+    {
+        "label": "Request certificate (X.509)",
+        "query": "force_authn=1&authn_context=urn:oasis:names:tc:SAML:2.0:ac:classes:X509",
+        "help": "RequestedAuthnContext asking for certificate authentication.",
+    },
+    {
+        "label": "Request smart card PKI",
+        "query": "force_authn=1&authn_context=urn:oasis:names:tc:SAML:2.0:ac:classes:SmartcardPKI",
+        "help": "What a PIV or CAC card satisfies.",
+    },
+    {
+        "label": "Request mutual TLS",
+        "query": "force_authn=1&authn_context=urn:oasis:names:tc:SAML:2.0:ac:classes:TLSClient",
+        "help": "Certificate presented in the TLS handshake at the IdP.",
+    },
+    {
+        "label": "Request multi-factor (Entra)",
+        "query": "force_authn=1&authn_context=http://schemas.microsoft.com/claims/multipleauthn",
+        "help": "The context Entra ID uses for multi-factor over SAML.",
+    },
+]
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -110,11 +177,11 @@ def dashboard(
         claim_lookup = describe_claim_lookup(connection, session.raw_claims or {})
 
     claims = session.raw_claims or {}
-    notable = [
-        {"name": name, "value": claims[name], "description": description}
-        for name, description in NOTABLE_CLAIMS.items()
-        if name in claims
-    ]
+    presets: list[dict[str, str]] = []
+    if connection is not None and connection.protocol == "oidc":
+        presets = OIDC_RETEST_PRESETS
+    elif connection is not None and connection.protocol == "saml":
+        presets = SAML_RETEST_PRESETS
 
     return templates.TemplateResponse(
         request,
@@ -123,7 +190,9 @@ def dashboard(
             "session": session,
             "connection": connection,
             "claims": claims,
-            "notable_claims": notable,
+            "policy_signals": authn_methods.policy_signals(claims),
+            "authn": authn_methods.analyse(claims, protocol=session.protocol),
+            "retest_presets": presets,
             "role_trace": role_trace,
             "claim_lookup": claim_lookup,
             "role_drifted": current_role != session.role,

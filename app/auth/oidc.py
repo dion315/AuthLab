@@ -8,6 +8,12 @@ The token exchange is written out explicitly instead of hidden behind a client
 library, because seeing the actual parameters is most of the value for anyone
 learning this flow. ID token signature and claim validation is the one part
 delegated to a library (authlib) — that is the part you must never hand-roll.
+
+Client authentication is configurable, including `private_key_jwt`: instead of
+a shared secret, the app signs an assertion with a private key whose
+certificate is registered at the provider. That is certificate-based
+authentication for the *client*, and it is what an Entra app registration with
+a certificate credential or an Okta service app expects.
 """
 
 from __future__ import annotations
@@ -17,15 +23,20 @@ import hashlib
 import secrets
 import time
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
+import jwt as pyjwt
 from authlib.jose import JsonWebKey, jwt
 from authlib.oidc.core import CodeIDToken
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
+from app.auth import certs
 from app.auth.connections import load_settings, redirect_uri
 from app.auth.schemas import OidcSettings
 from app.models import IdpConnection
+
+CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"  # noqa: S105
 
 # Discovery and JWKS documents change rarely; refetching them on every sign-in
 # adds latency and a dependency on the IdP being reachable at that instant.
@@ -39,9 +50,9 @@ REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 class OidcError(Exception):
     """Something went wrong that the operator needs to read and act on.
 
-    `code` and `description` come straight from the IdP where available — for
-    Conditional Access work those strings (AADSTS53003, access_denied, and so
-    on) are the actual test result, so they are preserved verbatim.
+    `code` and `description` come straight from the IdP where available — when
+    you are testing an access policy those strings (AADSTS53003, access_denied,
+    and so on) are the actual test result, so they are preserved verbatim.
     """
 
     def __init__(self, message: str, *, code: str = "", description: str = "", detail: dict | None = None):
@@ -134,7 +145,12 @@ def _pkce_pair() -> tuple[str, str]:
 
 
 async def build_authorization_request(
-    connection: IdpConnection, *, extra_prompt: str = "", extra_acr: str = ""
+    connection: IdpConnection,
+    *,
+    extra_prompt: str = "",
+    extra_acr: str = "",
+    extra_claims: str = "",
+    extra_max_age: str = "",
 ) -> tuple[str, dict[str, str]]:
     """Return (authorization_url, flow_state).
 
@@ -142,9 +158,10 @@ async def build_authorization_request(
     cookie; it is required again at the callback to complete PKCE and to check
     state and nonce.
 
-    extra_prompt / extra_acr let the dashboard trigger a step-up or forced
+    The `extra_*` arguments let the dashboard trigger a step-up or a forced
     re-authentication on demand without editing the saved connection — that is
-    how you test "require MFA" interactively.
+    how you test "require MFA" or "require a certificate" interactively and
+    still have the saved configuration to fall back to.
     """
     settings = load_settings(connection)
     assert isinstance(settings, OidcSettings)
@@ -181,13 +198,123 @@ async def build_authorization_request(
     if acr:
         params["acr_values"] = acr
 
-    if settings.max_age is not None:
-        params["max_age"] = str(settings.max_age)
+    max_age = extra_max_age or (str(settings.max_age) if settings.max_age is not None else "")
+    if max_age:
+        params["max_age"] = max_age
 
-    if settings.claims_request:
-        params["claims"] = settings.claims_request
+    claims_request = extra_claims or settings.claims_request
+    if claims_request:
+        params["claims"] = claims_request
 
     return f"{authorization_endpoint}?{urlencode(params)}", flow_state
+
+
+# --- client authentication ---------------------------------------------------
+#
+# How this app proves to the token endpoint that it is the registered client.
+# A shared secret is the common case; private_key_jwt is the certificate-based
+# alternative, where the provider holds only the public certificate and there
+# is no shared secret in existence to leak.
+
+
+def _assertion_algorithm(key: Any) -> str:
+    if isinstance(key, rsa.RSAPrivateKey):
+        return "RS256"
+    if isinstance(key, ec.EllipticCurvePrivateKey):
+        return {"secp256r1": "ES256", "secp384r1": "ES384", "secp521r1": "ES512"}.get(
+            key.curve.name, "ES256"
+        )
+    raise OidcError(
+        "The client private key must be RSA or EC. Ed25519 keys are not accepted "
+        "for client assertions by any provider this has been tested against."
+    )
+
+
+def build_client_assertion(settings: OidcSettings, *, audience: str) -> str:
+    """A signed JWT proving possession of the client's private key (RFC 7523).
+
+    The certificate is not sent — only a thumbprint of it in the header. The
+    provider already holds the certificate from when it was registered, and
+    matches on that thumbprint. Both `x5t` and `x5t#S256` are sent: Entra
+    documents the SHA-1 form, everything modern prefers SHA-256, and sending
+    both costs nothing.
+    """
+    if not settings.client_private_key:
+        raise OidcError(
+            "This connection uses private_key_jwt but has no client private key. "
+            "Add one, or generate a keypair from the connection page."
+        )
+    if not settings.client_id:
+        raise OidcError("A client ID is required to build a client assertion.")
+
+    try:
+        key = certs.load_private_key(settings.client_private_key)
+    except certs.CertificateError as exc:
+        raise OidcError(f"Client private key could not be read: {exc.message}") from exc
+
+    headers: dict[str, Any] = {"typ": "JWT"}
+    if settings.client_certificate:
+        try:
+            certificate = certs.load_certificate(settings.client_certificate)
+        except certs.CertificateError as exc:
+            raise OidcError(f"Client certificate could not be read: {exc.message}") from exc
+        headers["x5t#S256"] = certs.x5t_s256(certificate)
+        headers["x5t"] = (
+            base64.urlsafe_b64encode(bytes.fromhex(certs.thumbprint(certificate, "sha1")))
+            .decode("ascii")
+            .rstrip("=")
+        )
+
+    now = int(time.time())
+    payload = {
+        "iss": settings.client_id,
+        "sub": settings.client_id,
+        "aud": audience,
+        # Providers reject a replayed assertion by jti, so it must be unique.
+        "jti": secrets.token_urlsafe(24),
+        "iat": now,
+        "nbf": now,
+        # Short-lived on purpose: an assertion is used once, immediately.
+        "exp": now + 300,
+    }
+    return pyjwt.encode(payload, key, algorithm=_assertion_algorithm(key), headers=headers)
+
+
+def apply_client_authentication(
+    settings: OidcSettings, form: dict[str, str], *, token_endpoint: str, issuer: str
+) -> dict[str, str]:
+    """Add client credentials to a token request. Returns extra HTTP headers.
+
+    Mutates `form` because that is where three of the four methods put their
+    credentials; only client_secret_basic uses a header.
+    """
+    method = settings.client_auth_method
+
+    if method == "none":
+        # A public client. Legitimate with PKCE, and the reason the secret is
+        # never sent unless a method actually asks for it.
+        return {}
+
+    if method == "private_key_jwt":
+        audience = settings.assertion_audience or token_endpoint or issuer
+        form["client_assertion_type"] = CLIENT_ASSERTION_TYPE
+        form["client_assertion"] = build_client_assertion(settings, audience=audience)
+        return {}
+
+    if not settings.client_secret:
+        raise OidcError(
+            f"This connection uses {method} but has no client secret stored. "
+            "Enter one, or switch the client authentication method."
+        )
+
+    if method == "client_secret_basic":
+        # RFC 6749 §2.3.1: both halves are form-urlencoded before base64.
+        credentials = f"{quote(settings.client_id, safe='')}:{quote(settings.client_secret, safe='')}"
+        encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {encoded}"}
+
+    form["client_secret"] = settings.client_secret
+    return {}
 
 
 # --- callback ----------------------------------------------------------------
@@ -212,17 +339,19 @@ async def exchange_code(
     }
     if code_verifier:
         form["code_verifier"] = code_verifier
-    # A public client (no secret, PKCE only) is a legitimate configuration, so
-    # the secret is sent only when one is actually configured.
-    if settings.client_secret:
-        form["client_secret"] = settings.client_secret
+
+    headers = {"Accept": "application/json"}
+    headers.update(
+        apply_client_authentication(
+            settings,
+            form,
+            token_endpoint=token_endpoint,
+            issuer=discovery.get("issuer", settings.issuer),
+        )
+    )
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        response = await client.post(
-            token_endpoint,
-            data=form,
-            headers={"Accept": "application/json"},
-        )
+        response = await client.post(token_endpoint, data=form, headers=headers)
 
     try:
         payload = response.json()
@@ -233,8 +362,8 @@ async def exchange_code(
         ) from None
 
     if response.status_code >= 400 or "error" in payload:
-        # Surfaced rather than swallowed: this is where Conditional Access
-        # denials and consent failures show up with their real error codes.
+        # Surfaced rather than swallowed: this is where policy denials and
+        # consent failures show up with their real error codes.
         raise OidcError(
             "The IdP rejected the token request.",
             code=str(payload.get("error", f"http_{response.status_code}")),

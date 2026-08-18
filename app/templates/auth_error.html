@@ -1,24 +1,39 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% block title %}{{ title }}{% endblock %}
 
-{% block content %}
-<div class="card">
-  <h1>{{ title }}</h1>
-  <p>{{ message }}</p>
+{# No application shell: this page is reached mid-sign-in, when there is no
+   session and nothing to navigate to. #}
+{% block body %}
+<div class="auth-shell">
+  <main class="auth-card" id="main">
+    <div class="auth-brand">
+      {{ ui.shield() }}
+      <h1>{{ title }}</h1>
+    </div>
 
-  {% if detail %}
-  <h3 style="margin-top:20px;">What the provider returned</h3>
-  <pre>{{ detail | pretty_json }}</pre>
-  <p class="field-help">
-    When testing Conditional Access, this block is the result. Provider error
-    codes (for example <code>AADSTS53003</code> for a blocked-by-policy sign-in,
-    or <code>access_denied</code>) identify which control refused the request.
-    The same information is kept under <a href="/admin/events">Activity</a>.
-  </p>
-  {% endif %}
+    {% call ui.alert('error') %}<p>{{ message }}</p>{% endcall %}
 
-  <div class="btn-row">
-    <a class="btn" href="/login">Back to sign in</a>
+    {% if detail %}
+    <h3>What the provider returned</h3>
+    <pre>{{ detail | pretty_json }}</pre>
+    <p class="help">
+      When you are testing an access policy, this block is the result. The
+      provider's own error code identifies which control refused the request —
+      <code>AADSTS53003</code> for an Entra Conditional Access block,
+      <code>access_denied</code> for a generic refusal, and so on. The same
+      detail is kept under <a href="/admin/events">Activity</a>.
+    </p>
+    {% endif %}
+
+    <div class="btn-row">
+      <a class="btn btn-block" href="/login">Back to sign in</a>
+    </div>
+  </main>
+
+  <div class="auth-page-footer">
+    <div>{{ app_name }}</div>
+    {{ ui.theme_switch() }}
   </div>
 </div>
 {% endblock %}

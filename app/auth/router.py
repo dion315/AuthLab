@@ -1,14 +1,15 @@
 """Sign-in, sign-out, and IdP callback routes.
 
-Three ways in, all landing on the same session:
+Four ways in, all landing on the same session:
 
-  * local password  — always available, never blocked by an IdP or a policy
+  * local password  — always available, never blocked by a provider or a policy
   * OIDC            — /auth/oidc/{slug}/login
   * SAML            — /auth/saml/{slug}/login  (and IdP-initiated POST to /acs)
+  * client cert     — /auth/mtls/{slug}/login, no provider in the path at all
 
-Failures render a page that shows what the IdP actually said. That is not
-politeness — when you are testing Conditional Access, the denial *is* the
-result, and burying it in a stack trace throws away the answer.
+Failures render a page that shows what the provider actually said. That is not
+politeness — when you are testing an access policy, the denial *is* the result,
+and burying it in a stack trace throws away the answer.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app import events
 from app.auth import connections as conn
-from app.auth import flowstate, oidc, saml
+from app.auth import flowstate, mtls, oidc, saml
 from app.auth.rolemap import resolve_role
 from app.config import get_settings
 from app.db import get_db
@@ -37,7 +38,9 @@ from app.security import (
     create_session,
     hash_password,
     needs_rehash,
+    read_session,
     revoke_session,
+    revoke_sessions_for_subject,
     verify_password,
 )
 from app.templating import templates
@@ -81,6 +84,7 @@ def login_page(
             "connections": conn.list_enabled(db),
             "has_local": has_local,
             "error": request.query_params.get("error", ""),
+            "message": request.query_params.get("message", ""),
         },
     )
 
@@ -198,14 +202,20 @@ async def oidc_login(
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    # Optional per-attempt overrides, used by the "test step-up" buttons on the
+    # Optional per-attempt overrides, used by the re-test buttons on the
     # dashboard: /auth/oidc/{slug}/login?prompt=login&acr_values=mfa
     extra_prompt = request.query_params.get("prompt", "")
     extra_acr = request.query_params.get("acr_values", "")
+    extra_claims = request.query_params.get("claims", "")
+    extra_max_age = request.query_params.get("max_age", "")
 
     try:
         url, flow = await oidc.build_authorization_request(
-            connection, extra_prompt=extra_prompt, extra_acr=extra_acr
+            connection,
+            extra_prompt=extra_prompt,
+            extra_acr=extra_acr,
+            extra_claims=extra_claims,
+            extra_max_age=extra_max_age,
         )
     except oidc.OidcError as exc:
         # Caught, not raised: a bad issuer is a configuration mistake to be
@@ -235,7 +245,12 @@ async def oidc_login(
         request=request,
         connection_slug=slug,
         protocol="oidc",
-        detail={"prompt": extra_prompt, "acr_values": extra_acr},
+        detail={
+            "prompt": extra_prompt,
+            "acr_values": extra_acr,
+            "claims": extra_claims,
+            "max_age": extra_max_age,
+        },
     )
 
     response = RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
@@ -261,7 +276,7 @@ async def oidc_callback(
     params = dict(request.query_params)
 
     # The IdP reports a denial here, by redirecting back with an error rather
-    # than a code. Conditional Access blocks land in this branch.
+    # than a code. A policy that blocks the sign-in lands in this branch.
     if "error" in params:
         detail = {
             "error": params.get("error", ""),
@@ -430,10 +445,14 @@ def saml_login(slug: str, request: Request, db: Session = Depends(get_db)) -> Re
         )
 
     force = request.query_params.get("force_authn", "").lower() in ("1", "true", "yes")
+    authn_context = request.query_params.get("authn_context", "")
 
     try:
         url, request_id = saml.build_login_url(
-            connection, _saml_request_data(request), force_authn=force or None
+            connection,
+            _saml_request_data(request),
+            force_authn=force or None,
+            authn_context=authn_context,
         )
     except saml.SamlError as exc:
         events.record(
@@ -461,7 +480,7 @@ def saml_login(slug: str, request: Request, db: Session = Depends(get_db)) -> Re
         request=request,
         connection_slug=slug,
         protocol="saml",
-        detail={"request_id": request_id, "force_authn": force},
+        detail={"request_id": request_id, "force_authn": force, "authn_context": authn_context},
     )
 
     response = RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
@@ -561,6 +580,86 @@ async def saml_acs(slug: str, request: Request, db: Session = Depends(get_db)) -
     return response
 
 
+@router.api_route("/auth/saml/{slug}/sls", methods=["GET", "POST"])
+async def saml_sls(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Single Logout Service.
+
+    SP metadata advertises this endpoint, so it has to exist: without it a
+    federated sign-out ends on a 404 that looks like a broken logout, and an
+    IdP-initiated logout silently does nothing. Both directions are handled —
+    a LogoutResponse closing out our own sign-out, and an unsolicited
+    LogoutRequest from the provider.
+    """
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "saml":
+        return _login_error(
+            request,
+            title="Unknown connection",
+            message=f"No SAML connection named '{slug}'.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    form: dict[str, str] = {}
+    if request.method == "POST":
+        form = {key: str(value) for key, value in (await request.form()).items()}
+    request_data = _saml_request_data(request, form)
+    inbound_request = "SAMLRequest" in {**dict(request.query_params), **form}
+
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        redirect_to = await run_in_threadpool(saml.process_logout, connection, request_data)
+    except saml.SamlError as exc:
+        events.record(
+            db,
+            kind="logout",
+            outcome="error",
+            summary=exc.message,
+            request=request,
+            connection_slug=slug,
+            protocol="saml",
+            detail=exc.detail,
+        )
+        return _login_error(
+            request,
+            title="SAML logout message rejected",
+            message=exc.message,
+            detail=exc.detail,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # End the local session too. For an IdP-initiated logout that means every
+    # session belonging to the NameID in the request, not just this browser's —
+    # the whole point of the message is that the provider ended the user's
+    # session everywhere.
+    session = read_session(db, request)
+    if session is not None:
+        revoke_session(db, session.id)
+    revoked = 0
+    if inbound_request:
+        name_id = saml.logout_request_nameid(request_data)
+        if name_id:
+            revoked = revoke_sessions_for_subject(db, name_id)
+
+    events.record(
+        db,
+        kind="logout",
+        outcome="ok",
+        summary="IdP-initiated SAML logout" if inbound_request else "SAML logout completed",
+        request=request,
+        connection_slug=slug,
+        protocol="saml",
+        subject=session.subject if session else "",
+        detail={"sessions_revoked": revoked + (1 if session else 0)},
+    )
+
+    response = RedirectResponse(
+        redirect_to or "/login?message=Signed+out", status_code=status.HTTP_303_SEE_OTHER
+    )
+    clear_session_cookie(response)
+    return response
+
+
 @router.get("/auth/saml/{slug}/metadata")
 def saml_metadata(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
     """SP metadata XML for import into the IdP.
@@ -587,6 +686,155 @@ def saml_metadata(slug: str, request: Request, db: Session = Depends(get_db)) ->
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     return Response(content=xml, media_type="application/samlmetadata+xml")
+
+
+# --- client certificate (mutual TLS) -----------------------------------------
+#
+# No identity provider is involved here. The browser presents an X.509 client
+# certificate, the TLS terminator in front of this app forwards it in a header,
+# and the checks that a provider would normally run — chain, validity, EKU,
+# revocation, identity binding — run here instead, where every one of them is
+# visible.
+
+
+@router.get("/auth/mtls/{slug}/login")
+def mtls_login(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "mtls" or not connection.enabled:
+        return _login_error(
+            request,
+            title="Unknown connection",
+            message=f"No enabled client-certificate connection named '{slug}'.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    settings = conn.load_settings(connection)
+    pem, header_used = mtls.certificate_from_request(request, settings)  # type: ignore[arg-type]
+
+    try:
+        result = mtls.evaluate(connection, pem)
+    except mtls.MtlsError as exc:
+        events.record(
+            db,
+            kind="login_failure",
+            outcome="error",
+            summary=exc.message,
+            request=request,
+            connection_slug=slug,
+            protocol="mtls",
+            detail=exc.detail,
+        )
+        return _login_error(
+            request,
+            title="Connection is not configured correctly",
+            message=exc.message,
+            detail=exc.detail,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    if not result.accepted:
+        events.record(
+            db,
+            kind="login_failure",
+            outcome="denied",
+            summary=f"Client certificate rejected: {result.reason}"[:2000],
+            request=request,
+            connection_slug=slug,
+            protocol="mtls",
+            subject=result.identity,
+            detail=result.as_detail(),
+        )
+        return templates.TemplateResponse(
+            request,
+            "mtls_result.html",
+            {
+                "connection": connection,
+                "result": result,
+                "header_used": header_used,
+                "headers_present": mtls.headers_present(request),
+                "signed_in": False,
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    claims = result.claims
+    role, trace = resolve_role(connection, claims)
+    email = (
+        result.identity
+        if "@" in result.identity
+        else (claims.get("san_email") or [""])[0] or claims.get("subject_email", "")
+    )
+
+    response = RedirectResponse("/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    create_session(
+        db,
+        response,
+        subject=result.identity,
+        email=email,
+        display_name=claims.get("subject_cn") or result.identity,
+        role=role,
+        source=slug,
+        protocol="mtls",
+        raw_claims=claims,
+        request=request,
+    )
+    events.record(
+        db,
+        kind="login_success",
+        outcome="ok",
+        summary=f"Certificate sign-in via {connection.name}",
+        request=request,
+        connection_slug=slug,
+        protocol="mtls",
+        subject=result.identity,
+        detail={"role": role, "role_trace": trace, **result.as_detail()},
+    )
+    return response
+
+
+@router.get("/auth/mtls/{slug}/inspect", response_class=HTMLResponse)
+def mtls_inspect(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """What the proxy actually forwarded, and what this app makes of it.
+
+    Open without signing in on purpose: the whole reason to look at this page
+    is that certificate sign-in is not working, and it only ever shows the
+    caller their own certificate. When nothing arrives at all, the list of
+    known certificate headers that *did* arrive is usually the answer — it is
+    almost always a proxy that was never asked to request a certificate.
+    """
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "mtls":
+        return _login_error(
+            request,
+            title="Unknown connection",
+            message=f"No client-certificate connection named '{slug}'.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    settings = conn.load_settings(connection)
+    pem, header_used = mtls.certificate_from_request(request, settings)  # type: ignore[arg-type]
+    try:
+        result = mtls.evaluate(connection, pem)
+    except mtls.MtlsError as exc:
+        return _login_error(
+            request,
+            title="Connection is not configured correctly",
+            message=exc.message,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "mtls_result.html",
+        {
+            "connection": connection,
+            "result": result,
+            "header_used": header_used,
+            "headers_present": mtls.headers_present(request),
+            "inspect_only": True,
+            "signed_in": False,
+        },
+    )
 
 
 # --- sign-out ----------------------------------------------------------------

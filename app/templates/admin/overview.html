@@ -1,48 +1,62 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% set active_nav = 'admin' %}
-{% block title %}Admin{% endblock %}
+{% block title %}Connections{% endblock %}
 
 {% block content %}
-<h1>Admin console</h1>
-<p class="muted small">
-  Everything here is stored in the database and takes effect immediately — no
-  redeploy, no environment variable changes.
-  {% if read_only %}You have the <strong>power</strong> role, which is read-only here.{% endif %}
-</p>
+<div class="page-header">
+  <h1>Connections</h1>
+  <p class="lead">
+    Everything here is stored in the database and takes effect immediately — no
+    redeploy, no environment variable changes.
+    {% if read_only %}Your <strong>power</strong> role is read-only on this page.{% endif %}
+  </p>
+</div>
 
 <div class="card">
-  <h3>Identity provider connections</h3>
+  <div class="card-title">
+    <h3>Identity provider connections</h3>
+    {% if not read_only %}
+    <div class="btn-row btn-row-tight">
+      <a class="btn btn-sm" href="/admin/connections/new?protocol=oidc">Add OIDC</a>
+      <a class="btn btn-quiet btn-sm" href="/admin/connections/new?protocol=saml">Add SAML</a>
+      <a class="btn btn-quiet btn-sm" href="/admin/connections/new?protocol=mtls">Add client certificate</a>
+    </div>
+    {% endif %}
+  </div>
+
   {% if connections %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>Name</th><th>Protocol</th><th>Slug</th><th>Status</th><th></th></tr>
-      {% for connection in connections %}
-      <tr>
-        <td><strong>{{ connection.name }}</strong></td>
-        <td><span class="badge">{{ connection.protocol|upper }}</span></td>
-        <td class="mono">{{ connection.slug }}</td>
-        <td>
-          {% if connection.enabled %}<span class="badge ok">enabled</span>
-          {% else %}<span class="badge">disabled</span>{% endif %}
-        </td>
-        <td style="text-align:right;">
-          <a href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">Test sign-in</a>
-          {% if not read_only %} · <a href="/admin/connections/{{ connection.id }}">Edit</a>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr><th>Name</th><th>Protocol</th><th>Slug</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for connection in connections %}
+        <tr>
+          <td data-label="Name"><strong>{{ connection.name }}</strong></td>
+          <td data-label="Protocol">
+            <span class="badge">
+              {%- if connection.protocol == 'mtls' %}mTLS{% else %}{{ connection.protocol|upper }}{% endif -%}
+            </span>
+          </td>
+          <td data-label="Slug" class="mono">{{ connection.slug }}</td>
+          <td data-label="Status">
+            {% if connection.enabled %}<span class="badge ok">enabled</span>
+            {% else %}<span class="badge">disabled</span>{% endif %}
+          </td>
+          <td data-label="Actions" class="right">
+            <a href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">Test sign-in</a>
+            {% if not read_only %} · <a href="/admin/connections/{{ connection.id }}">Edit</a>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
   {% else %}
-  <p class="muted small">
-    None yet. Add one to start testing a real sign-in flow.
-  </p>
-  {% endif %}
-
-  {% if not read_only %}
-  <div class="btn-row">
-    <a class="btn" href="/admin/connections/new?protocol=oidc">Add OIDC connection</a>
-    <a class="btn btn-quiet" href="/admin/connections/new?protocol=saml">Add SAML connection</a>
+  <div class="empty">
+    No connections yet. Add one to start testing a real sign-in flow.
   </div>
   {% endif %}
 </div>
@@ -55,10 +69,10 @@
       {{ user_count }} user{{ '' if user_count == 1 else 's' }} ·
       {{ group_count }} group{{ '' if group_count == 1 else 's' }}
     </p>
-    <p class="field-help">SCIM base URL</p>
+    <label for="scim-url">SCIM base URL</label>
     <div class="copyable">
       <input type="text" id="scim-url" value="{{ scim_base_url }}" readonly />
-      <button type="button" class="btn-quiet" data-copy-target="scim-url">Copy</button>
+      <button type="button" class="btn-quiet btn-sm" data-copy-target="scim-url">Copy</button>
     </div>
     <div class="btn-row"><a class="btn btn-quiet" href="/admin/scim">Open SCIM console</a></div>
   </div>
@@ -66,12 +80,14 @@
   <div class="card">
     <h3>Accounts &amp; sessions</h3>
     <p class="muted small">
-      Local accounts are independent of any provider and stay usable when a
-      policy blocks federated sign-in.
+      Local accounts are independent of any provider and stay usable when an
+      access policy blocks federated sign-in.
     </p>
     <div class="btn-row">
-      {% if not read_only %}<a class="btn btn-quiet" href="/admin/users">Local accounts</a>{% endif %}
-      {% if not read_only %}<a class="btn btn-quiet" href="/admin/sessions">Active sessions</a>{% endif %}
+      {% if not read_only %}
+      <a class="btn btn-quiet" href="/admin/users">Local accounts</a>
+      <a class="btn btn-quiet" href="/admin/sessions">Active sessions</a>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -79,25 +95,27 @@
 <div class="card">
   <h3>Recent activity</h3>
   {% if recent_events %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>Time</th><th>Event</th><th>Outcome</th><th>Summary</th><th>Source IP</th></tr>
-      {% for event in recent_events %}
-      <tr>
-        <td class="mono">{{ event.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-        <td>{{ event.kind }}</td>
-        <td><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
-        <td class="muted">{{ event.summary }}</td>
-        <td class="mono">{{ event.client_ip }}</td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr><th>Time</th><th>Event</th><th>Outcome</th><th>Summary</th><th>Source IP</th></tr>
+      </thead>
+      <tbody>
+        {% for event in recent_events %}
+        <tr>
+          <td data-label="Time" class="mono">{{ event.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td data-label="Event">{{ event.kind }}</td>
+          <td data-label="Outcome"><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
+          <td data-label="Summary" class="muted">{{ event.summary }}</td>
+          <td data-label="Source IP" class="mono">{{ event.client_ip }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
-  <p class="field-help"><a href="/admin/events">Full activity log →</a></p>
+  <p class="help"><a href="/admin/events">Full activity log →</a></p>
   {% else %}
-  <p class="muted small">Nothing recorded yet.</p>
+  <div class="empty">Nothing recorded yet.</div>
   {% endif %}
 </div>
 {% endblock %}
-
-{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

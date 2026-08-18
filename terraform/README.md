@@ -47,6 +47,29 @@ Generate `app_secret_key` with:
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
+## Client certificates
+
+Certificate-based sign-in needs the platform's TLS terminator to *request* a
+client certificate from the browser and forward it. The app never sees the
+handshake, so if the terminator does not ask, no certificate exists to check —
+which is the single most common reason a client-certificate connection reports
+"no certificate presented".
+
+| Cloud | How to enable | Header the app receives |
+|---|---|---|
+| Azure | `client_certificate_mode = "accept"` on the module (already wired) | `x-forwarded-client-cert` (Envoy XFCC) |
+| AWS | App Runner cannot do mutual TLS. Put an Application Load Balancer in front with mTLS in passthrough mode | `x-amzn-mtls-clientcert` |
+| GCP | Cloud Run needs a global external Application Load Balancer with a server TLS policy; direct Cloud Run URLs cannot request a certificate | `x-client-cert-*`, per your custom header config |
+
+Set the header name to match on the connection in **Connections → your
+client-certificate connection**. Use `accept` rather than `require`: `require`
+refuses every connection without a certificate, including the local sign-in you
+would need to undo it.
+
+The terminator must also *replace* that header on the way in rather than append
+to it. Anything that lets a caller supply its own value turns certificate
+authentication into a header anyone can set.
+
 ## Before you use this for anything real
 
 - **State contains secrets.** `app_secret_key` and the database password are

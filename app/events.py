@@ -1,7 +1,7 @@
 """Recording authentication and provisioning events.
 
 Every sign-in attempt, every SCIM call, and every configuration change lands
-here. When a Conditional Access policy blocks someone, the interesting output
+here. When an access policy blocks someone, the interesting output
 is not the error page they see — it is the error code the IdP returned, the IP
 it saw, and how that differs from the attempt that worked five minutes ago.
 """

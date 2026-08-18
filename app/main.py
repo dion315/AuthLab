@@ -73,8 +73,8 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="AuthLab",
     description=(
-        "IdP-agnostic harness for OIDC/OAuth 2.0, SAML 2.0, SCIM 2.0 provisioning, "
-        "and Conditional Access evaluation."
+        "IdP-agnostic harness for OIDC/OAuth 2.0, SAML 2.0, certificate-based "
+        "authentication, SCIM 2.0 provisioning, and access policy evaluation."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -98,7 +98,16 @@ async def security_headers(request: Request, call_next) -> Response:
 
     # The SP metadata endpoint returns XML for an IdP to consume, and the SCIM
     # endpoints are machine-to-machine; browser protections do not apply.
-    if not request.url.path.startswith(("/scim/", "/auth/saml/")):
+    #
+    # Scoped to the metadata path rather than all of /auth/saml/, because the
+    # ACS and SLS endpoints do render HTML — an assertion that fails validation
+    # produces an error page carrying the provider's own text — and those pages
+    # want the policy as much as any other.
+    path = request.url.path
+    exempt = path.startswith("/scim/") or (
+        path.startswith("/auth/saml/") and path.endswith("/metadata")
+    )
+    if not exempt:
         response.headers.setdefault(
             "Content-Security-Policy",
             "; ".join(

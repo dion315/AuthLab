@@ -11,6 +11,8 @@ __pycache__
 .mypy_cache
 tests
 terraform
+# Local mTLS test rig; the image never reads it.
+mtls
 data
 *.db
 *.sqlite3

@@ -1,43 +1,74 @@
-<!doctype html>
+{% import "_icons.html" as ui %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block title %}{{ app_name }}{% endblock %} — {{ app_name }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="description" content="Authentication test harness for OIDC, SAML, SCIM, and certificate-based sign-in." />
+  <title>{% block title %}{{ app_name }}{% endblock %} · {{ app_name }}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/static/app.css" />
+  {# Not deferred: this resolves the theme before the first paint, which is the
+     only way to avoid a flash of the wrong palette on every navigation. #}
+  <script src="/static/theme.js"></script>
+  <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="/">{{ app_name }}</a>
+{% block body %}
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="app-header">
+    <a class="brand" href="/">
+      {{ ui.shield() }}
+      <span>{{ app_name }}</span>
+      <span class="brand-sub">authentication test harness</span>
+    </a>
+
     {% if session %}
-    <nav>
-      <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard</a>
+    <button type="button" class="nav-toggle" aria-expanded="false" aria-label="Menu">
+      {{ ui.icon('menu') }}
+    </button>
+
+    <nav class="nav" aria-label="Main">
+      <a href="/dashboard" {% if active_nav == 'dashboard' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
       {% if session.role in ('admin', 'power') %}
-      <a href="/admin" class="{{ 'active' if active_nav == 'admin' }}">Admin</a>
-      <a href="/admin/scim" class="{{ 'active' if active_nav == 'scim' }}">SCIM</a>
-      <a href="/admin/events" class="{{ 'active' if active_nav == 'events' }}">Activity</a>
+      <a href="/admin" {% if active_nav == 'admin' %}class="active" aria-current="page"{% endif %}>Connections</a>
+      <a href="/admin/scim" {% if active_nav == 'scim' %}class="active" aria-current="page"{% endif %}>Provisioning</a>
+      <a href="/admin/events" {% if active_nav == 'events' %}class="active" aria-current="page"{% endif %}>Activity</a>
       {% endif %}
     </nav>
-    <div class="topbar-user">
-      <span class="badge role-{{ session.role }}">{{ session.role }}</span>
-      <span class="muted">{{ session.email or session.subject }}</span>
-      <form method="post" action="/logout" class="inline">
-        <button type="submit" class="btn-quiet">Sign out</button>
-      </form>
-    </div>
     {% endif %}
+
+    <div class="header-end">
+      {{ ui.theme_switch() }}
+      {% if session %}
+      <div class="user-chip">
+        <span class="badge role-{{ session.role }}">{{ session.role }}</span>
+        <span class="user-email">{{ session.email or session.subject }}</span>
+      </div>
+      <form method="post" action="/logout" class="inline">
+        <button type="submit" class="btn-ghost btn-sm" title="Sign out">
+          {{ ui.icon('logout') }}<span class="visually-hidden">Sign out</span>
+        </button>
+      </form>
+      {% endif %}
+    </div>
   </header>
 
-  <main class="wrap">
-    {% if message %}<div class="flash flash-ok">{{ message }}</div>{% endif %}
-    {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+  <main class="page" id="main">
+    {% if message %}
+      {% call ui.alert('ok') %}<p>{{ message }}</p>{% endcall %}
+    {% endif %}
+    {% if error %}
+      {% call ui.alert('error') %}<p>{{ error }}</p>{% endcall %}
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="wrap muted small">
+  <footer class="app-footer">
     {{ app_name }} — a test harness. Not intended to hold production data.
   </footer>
-
-  {% block scripts %}{% endblock %}
+{% endblock %}
 </body>
 </html>

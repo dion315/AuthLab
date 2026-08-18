@@ -6,6 +6,14 @@
 #
 # To rehearse the deployed setup against Postgres instead:
 #   docker compose --profile postgres up --build
+#
+# To test certificate-based authentication, which needs a TLS terminator that
+# asks the browser for a client certificate:
+#   docker compose up nginx-mtls --build      -> https://localhost:8443
+#
+# That last one names the service rather than the profile on purpose: it starts
+# the mTLS stack and nothing else, so the plain-HTTP app on 8000 stays out of
+# the way. It is a separate instance with its own database.
 
 services:
   app:
@@ -69,6 +77,51 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # --- certificate-based authentication ---------------------------------------
+  # Only starts when asked for by name: `docker compose up nginx-mtls`.
+
+  app-mtls:
+    profiles: ["mtls"]
+    build: .
+    environment:
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-only-not-a-real-secret-change-me-please}
+      # Must match what the browser sees, or the session cookie loses its
+      # Secure flag and every derived URL points at the wrong place.
+      BASE_URL: https://localhost:8443
+      DATABASE_URL: sqlite:///./data/authlab.db
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@authlab.local}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      # nginx is the only thing that can reach this container, so the forwarded
+      # client address can be believed.
+      TRUST_PROXY_HEADERS: "true"
+    volumes:
+      - authlab-mtls-data:/app/data
+    restart: unless-stopped
+
+  nginx-mtls:
+    profiles: ["mtls"]
+    image: nginx:1.27-alpine
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./mtls/nginx.conf:/etc/nginx/nginx.conf:ro
+      - authlab-mtls-certs:/etc/nginx/certs
+    depends_on:
+      - app-mtls
+    # A self-signed server certificate is generated on first start. Browsers
+    # will warn about it — that warning is about *this* certificate, not the
+    # client certificate being tested, so accept it and continue.
+    # One line per shell statement: a YAML folded block keeps the newline on any
+    # line indented further than the block, which would split a wrapped command
+    # into several broken ones.
+    command: >
+      sh -c "apk add --no-cache openssl >/dev/null 2>&1 &&
+      { [ -f /etc/nginx/certs/server.crt ] || openssl req -x509 -newkey rsa:2048 -nodes -days 825 -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' -keyout /etc/nginx/certs/server.key -out /etc/nginx/certs/server.crt 2>/dev/null; } &&
+      exec nginx -g 'daemon off;'"
+    restart: unless-stopped
+
 volumes:
   authlab-data:
   authlab-pgdata:
+  authlab-mtls-data:
+  authlab-mtls-certs:

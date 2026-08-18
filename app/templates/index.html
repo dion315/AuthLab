@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% block title %}Welcome{% endblock %}
 
 {% block content %}
@@ -6,8 +7,9 @@
   <h1>{{ app_name }}</h1>
   <p class="muted">
     A small weather app wrapped around a full authentication stack — OIDC/OAuth 2.0,
-    SAML 2.0, SCIM 2.0 provisioning, and role-based access — so you can point a real
-    identity provider at it and watch exactly what happens.
+    SAML 2.0, certificate-based sign-in, SCIM 2.0 provisioning, and role-based
+    access — so you can point a real identity provider at it and watch exactly
+    what happens.
   </p>
   <div class="btn-row">
     <a class="btn" href="/login">Sign in</a>
@@ -20,8 +22,17 @@
     <p class="muted small">
       OIDC connections are configured by issuer URL and resolved through discovery,
       so Entra ID, Okta, Auth0, Ping, Keycloak, and Google all work without
-      provider-specific code. SAML connections take an SSO URL and a signing
+      provider-specific code. SAML connections take a sign-on URL and a signing
       certificate.
+    </p>
+  </div>
+  <div class="card">
+    <h3>Certificates, end to end</h3>
+    <p class="muted small">
+      Client certificates presented straight to this app over mutual TLS,
+      certificate credentials for the client itself (private_key_jwt), signed
+      SAML AuthnRequests, and encrypted assertions. Every check is reported
+      individually rather than as a single pass or fail.
     </p>
   </div>
   <div class="card">
@@ -35,9 +46,9 @@
   <div class="card">
     <h3>Built to be inspected</h3>
     <p class="muted small">
-      Every sign-in records what the provider asserted, which rule matched, and what
-      the source address was. Denials are shown with the provider's own error code
-      rather than a generic failure page.
+      Every sign-in records what the provider asserted, which rule matched, and
+      what the source address was. Denials are shown with the provider's own
+      error code rather than a generic failure page.
     </p>
   </div>
 </div>

@@ -1,0 +1,105 @@
+{# Inline SVG icons.
+
+   Inline SVG rather than an icon font or sprite file: no extra request, no
+   external dependency, and it inherits `currentColor` so every icon follows
+   the theme without a second set of rules. The Content Security Policy forbids
+   inline <style> and inline <script>, but markup is markup — these are fine.
+
+   All icons share a 24x24 viewBox and a 1.75 stroke so they line up optically
+   at any size the CSS asks for. #}
+
+{% macro shield() %}
+<svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <path d="M12 2.5 4.5 5.5v6c0 4.6 3.1 8.4 7.5 10 4.4-1.6 7.5-5.4 7.5-10v-6L12 2.5Z" />
+  <path d="m8.75 11.75 2.25 2.25 4.25-4.5" />
+</svg>
+{% endmacro %}
+
+{% macro icon(name, extra_class='') %}
+<svg{% if extra_class %} class="{{ extra_class }}"{% endif %} viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
+     aria-hidden="true" focusable="false">
+  {%- if name == 'key' -%}
+  <circle cx="8" cy="15" r="4" /><path d="m10.85 12.15 8.15-8.15M17 6l2 2M14 9l2 2" />
+  {%- elif name == 'certificate' -%}
+  <circle cx="12" cy="9" r="5" /><path d="M8.5 13.2 7 21l5-2.5 5 2.5-1.5-7.8" />
+  {%- elif name == 'link' -%}
+  <path d="M10 13a5 5 0 0 0 7.1.1l3-3a5 5 0 0 0-7.1-7.1L11.3 4.7" />
+  <path d="M14 11a5 5 0 0 0-7.1-.1l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7" />
+  {%- elif name == 'lock' -%}
+  <rect x="4.5" y="10.5" width="15" height="10" rx="2" /><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+  {%- elif name == 'chevron' -%}
+  <path d="m9 5 7 7-7 7" />
+  {%- elif name == 'check' -%}
+  <path d="m5 12.5 4.5 4.5L19 7" />
+  {%- elif name == 'x' -%}
+  <path d="M6 6l12 12M18 6 6 18" />
+  {%- elif name == 'check-circle' -%}
+  <circle cx="12" cy="12" r="9" /><path d="m8 12.5 2.5 2.5L16 9.5" />
+  {%- elif name == 'x-circle' -%}
+  <circle cx="12" cy="12" r="9" /><path d="M9 9l6 6M15 9l-6 6" />
+  {%- elif name == 'alert' -%}
+  <path d="M12 4.5 2.8 20h18.4L12 4.5Z" /><path d="M12 10v4M12 17h.01" />
+  {%- elif name == 'info' -%}
+  <circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" />
+  {%- elif name == 'sun' -%}
+  <circle cx="12" cy="12" r="4" />
+  <path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3 4.9 4.9M19.1 19.1l-1.4-1.4M17.7 6.3l1.4-1.4M4.9 19.1l1.4-1.4" />
+  {%- elif name == 'moon' -%}
+  <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+  {%- elif name == 'monitor' -%}
+  <rect x="3" y="4.5" width="18" height="12" rx="2" /><path d="M8.5 20.5h7M12 16.5v4" />
+  {%- elif name == 'menu' -%}
+  <path d="M4 7h16M4 12h16M4 17h16" />
+  {%- elif name == 'user' -%}
+  <circle cx="12" cy="8" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" />
+  {%- elif name == 'logout' -%}
+  <path d="M15 17v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v2" />
+  <path d="M19 12H9m10 0-3-3m3 3-3 3" />
+  {%- elif name == 'search' -%}
+  <circle cx="11" cy="11" r="6" /><path d="m15.5 15.5 4 4" />
+  {%- elif name == 'download' -%}
+  <path d="M12 3v12m0 0 4-4m-4 4-4-4" /><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+  {%- elif name == 'refresh' -%}
+  <path d="M20 11a8 8 0 0 0-13.7-5.2L3 9" /><path d="M3 4v5h5" />
+  <path d="M4 13a8 8 0 0 0 13.7 5.2L21 15" /><path d="M21 20v-5h-5" />
+  {%- endif -%}
+</svg>
+{% endmacro %}
+
+{# The mark shown next to a connection on the sign-in page. Protocol-specific
+   so the three sign-in routes are distinguishable at a glance. #}
+{% macro protocol_icon(protocol) %}
+  {%- if protocol == 'oidc' -%}{{ icon('key') }}
+  {%- elif protocol == 'saml' -%}{{ icon('link') }}
+  {%- elif protocol == 'mtls' -%}{{ icon('certificate') }}
+  {%- else -%}{{ icon('lock') }}{%- endif -%}
+{% endmacro %}
+
+{% macro theme_switch() %}
+<div class="theme-switch" role="group" aria-label="Colour theme">
+  <button type="button" data-theme-set="system" aria-pressed="true" title="Follow system setting">
+    {{ icon('monitor') }}<span class="visually-hidden">Follow system theme</span>
+  </button>
+  <button type="button" data-theme-set="light" aria-pressed="false" title="Light">
+    {{ icon('sun') }}<span class="visually-hidden">Light theme</span>
+  </button>
+  <button type="button" data-theme-set="dark" aria-pressed="false" title="Dark">
+    {{ icon('moon') }}<span class="visually-hidden">Dark theme</span>
+  </button>
+</div>
+{% endmacro %}
+
+{% macro alert(kind, heading='') %}
+<div class="alert alert-{{ kind }}">
+  {%- if kind == 'ok' %}{{ icon('check-circle') }}
+  {%- elif kind == 'error' %}{{ icon('x-circle') }}
+  {%- elif kind == 'warn' %}{{ icon('alert') }}
+  {%- else %}{{ icon('info') }}{% endif -%}
+  <div>
+    {% if heading %}<p><strong>{{ heading }}</strong></p>{% endif %}
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}

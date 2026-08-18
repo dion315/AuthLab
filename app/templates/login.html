@@ -1,49 +1,90 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% block title %}Sign in{% endblock %}
 
-{% block content %}
-<div class="login-wrap">
-  <h1>Sign in</h1>
-  <p class="muted small">Choose an identity provider, or use a local account.</p>
-
-  {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
-
-  {% if connections %}
-  <div class="idp-list">
-    {% for connection in connections %}
-    <a class="idp-button" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">
-      <span>{{ connection.name }}</span>
-      <span class="badge">{{ connection.protocol|upper }}</span>
-    </a>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="flash flash-warn">
-    No identity providers are configured yet. Sign in with the local
-    administrator account below, then add one under <strong>Admin →
-    Connections</strong>.
-  </div>
-  {% endif %}
-
-  {% if has_local %}
-  <div class="divider">local account</div>
-
-  <form method="post" action="/auth/local/login">
-    <label for="email">Email</label>
-    <input type="email" id="email" name="email" autocomplete="username" required />
-
-    <label for="password">Password</label>
-    <input type="password" id="password" name="password" autocomplete="current-password" required />
-
-    <div class="btn-row">
-      <button type="submit">Sign in</button>
+{# The sign-in page does not use the application shell: no navigation, no user
+   menu, nothing to click but the ways in. That is what every enterprise sign-in
+   screen does, and it is not decoration — a page with one job should not offer
+   a second one. #}
+{% block body %}
+<div class="auth-shell">
+  <main class="auth-card" id="main">
+    <div class="auth-brand">
+      {{ ui.shield() }}
+      <h1>Sign in to {{ app_name }}</h1>
+      <p>Choose an identity provider, or use a local account.</p>
     </div>
-  </form>
-  <p class="field-help">
-    The local account never goes through an identity provider, so it still works
-    when a Conditional Access policy blocks federated sign-in — which is exactly
-    when you need to get in and change the policy.
-  </p>
-  {% endif %}
+
+    {% if error %}
+      {% call ui.alert('error') %}<p>{{ error }}</p>{% endcall %}
+    {% endif %}
+    {% if message %}
+      {% call ui.alert('ok') %}<p>{{ message }}</p>{% endcall %}
+    {% endif %}
+
+    {% if connections %}
+    <div class="idp-list">
+      {% for connection in connections %}
+      <a class="idp-button" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">
+        <span class="idp-icon">{{ ui.protocol_icon(connection.protocol) }}</span>
+        <span class="idp-label">
+          <span>{{ connection.name }}</span>
+          <span class="idp-protocol">
+            {%- if connection.protocol == 'oidc' %}OpenID Connect
+            {%- elif connection.protocol == 'saml' %}SAML 2.0
+            {%- else %}Client certificate{% endif -%}
+          </span>
+        </span>
+        <span class="idp-chevron">{{ ui.icon('chevron') }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+      {% call ui.alert('info', 'No identity providers configured yet') %}
+      <p>
+        Sign in with the local administrator account below, then add a connection
+        under <strong>Connections</strong>.
+      </p>
+      {% endcall %}
+    {% endif %}
+
+    {% if has_local %}
+    {% if connections %}<div class="divider">or</div>{% endif %}
+
+    <form method="post" action="/auth/local/login">
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" autocomplete="username"
+               autocapitalize="none" spellcheck="false" inputmode="email"
+               placeholder="you@example.com" required autofocus />
+      </div>
+
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="password-field">
+          <input type="password" id="password" name="password"
+                 autocomplete="current-password" required />
+          <button type="button" class="password-toggle" data-toggle-password="password"
+                  aria-label="Show password">Show</button>
+        </div>
+      </div>
+
+      <button type="submit" class="btn-block">Sign in</button>
+    </form>
+
+    <div class="auth-footer">
+      <p class="muted small">
+        The local account never goes through an identity provider, so it still
+        works when an access policy blocks federated sign-in — which is exactly
+        when you need to get in and change the policy.
+      </p>
+    </div>
+    {% endif %}
+  </main>
+
+  <div class="auth-page-footer">
+    <div>{{ app_name }} — a test harness. Not intended to hold production data.</div>
+    {{ ui.theme_switch() }}
+  </div>
 </div>
 {% endblock %}

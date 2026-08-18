@@ -1,31 +1,116 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% set active_nav = 'dashboard' %}
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
-<div class="card">
+<div class="page-header">
   <h1>{{ session.display_name or session.email or session.subject }}</h1>
-  <p class="muted small">
-    {{ session.email }} ·
-    role <span class="badge role-{{ session.role }}">{{ session.role }}</span> ·
-    signed in via
-    {% if session.protocol == 'local' %}local account{% else %}
-      <span class="badge">{{ session.protocol|upper }}</span> {{ connection.name if connection else session.source }}
-    {% endif %}
+  <p class="lead">
+    {{ session.email }}{% if session.email %} · {% endif %}role
+    <span class="badge role-{{ session.role }}">{{ session.role }}</span> ·
+    signed in
+    {%- if session.protocol == 'local' %} with a local account
+    {%- elif session.protocol == 'mtls' %} with a client certificate via {{ connection.name if connection else session.source }}
+    {%- else %} via {{ connection.name if connection else session.source }}
+      <span class="badge">{{ session.protocol|upper }}</span>{% endif %}
   </p>
-  {% if role_drifted %}
-  <div class="flash flash-warn" style="margin-top:14px;">
-    The role mapping has changed since you signed in. Your session still carries
-    <strong>{{ session.role }}</strong>, but the current rules would assign
-    <strong>{{ current_role }}</strong>. Sign out and back in to pick up the change.
+</div>
+
+{% if role_drifted %}
+  {% call ui.alert('warn', 'The role mapping changed after you signed in') %}
+  <p>
+    Your session still carries <strong>{{ session.role }}</strong>, but the current
+    rules would assign <strong>{{ current_role }}</strong>. Sign out and back in to
+    pick up the change.
+  </p>
+  {% endcall %}
+{% endif %}
+
+{# The verdict first. When you are testing whether a policy applied, this is
+   the answer you came for; everything below it is the evidence.
+
+   A local sign-in gets neutral styling rather than a red "no": no provider was
+   involved, so there is no policy outcome to report and nothing has failed. #}
+{% if session.protocol == 'local' %}
+<div class="verdict verdict-neutral">
+  <div class="verdict-icon">{{ ui.icon('user') }}</div>
+  <div>
+    <h2>Local account</h2>
+    <p>
+      No identity provider and no certificate were involved, so no access policy
+      applied to this sign-in.
+    </p>
   </div>
+</div>
+{% else %}
+<div class="verdict {% if authn.certificate_based %}verdict-ok{% elif authn.certificate_based is none %}verdict-unknown{% else %}verdict-fail{% endif %}">
+  <div class="verdict-icon">
+    {%- if authn.certificate_based %}{{ ui.icon('certificate') }}
+    {%- elif authn.certificate_based is none %}{{ ui.icon('info') }}
+    {%- else %}{{ ui.icon('lock') }}{% endif -%}
+  </div>
+  <div>
+    <h2>
+      {%- if authn.certificate_based %}Certificate-based authentication
+      {%- elif authn.certificate_based is none %}The provider did not say how you authenticated
+      {%- else %}Not certificate-based{% endif -%}
+    </h2>
+    <p>
+      {%- if authn.certificate_based %}
+        A certificate was used to authenticate this session.
+      {%- elif authn.certificate_based is none %}
+        No <code>amr</code> claim and no <code>AuthnContextClassRef</code> came back, so
+        nothing can be concluded about the method used.
+      {%- else %}
+        The methods the provider named do not include a certificate.
+      {%- endif %}
+      {% if authn.multi_factor %}Multiple factors were asserted.{% endif %}
+      {% if authn.phishing_resistant %}The method is phishing-resistant.{% endif %}
+    </p>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>How you authenticated</h3>
+  {% if authn.methods %}
+  <div class="method-list">
+    {% for method in authn.methods %}
+    <div class="method {% if method.certificate %}method-cert{% endif %}">
+      <span class="method-value">{{ method.value }}</span>
+      <div class="method-body">
+        <div><strong>{{ method.label }}</strong>{% if method.factor != 'unknown' %} · {{ method.factor }}{% endif %}</div>
+        {% if method.note %}<p class="help">{{ method.note }}</p>{% endif %}
+        {% if not method.recognised %}
+        <p class="help">
+          Not a value this app recognises. It came from <code>{{ method.source }}</code>
+          exactly as shown — provider-specific values are common here.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted small">
+    {{ authn.evidence | join(' ') }}
+  </p>
   {% endif %}
+
+  <p class="help">
+    Access policies are evaluated at the identity provider — Conditional Access in
+    Entra ID, authentication policies in Okta, and their equivalents elsewhere.
+    Nothing in this app and nothing in the cloud hosting it changes them. What
+    you see here is the result the provider asserted, which is how you tell
+    whether a policy applied.
+  </p>
 </div>
 
 <div class="card">
   <h3>Local weather</h3>
-  <div id="weather"><span class="muted">Locating…</span></div>
-  <p class="field-help">
+  <div id="weather"><span class="muted small">Locating…</span></div>
+  <p class="help">
     The one piece of ordinary application functionality here. Your browser
     resolves the coordinates; the forecast is fetched server-side so the page
     needs no external network permission.
@@ -36,22 +121,22 @@
 <div class="card">
   <h3>Why you have this role</h3>
   <p class="muted small">
-    Looking for claim <code>{{ claim_lookup.claim }}</code>
+    Looking for <code>{{ claim_lookup.claim }}</code>
     {% if claim_lookup.found %}
-      — found {{ claim_lookup.values | join(', ') }}
+      — found {{ claim_lookup.found_values | join(', ') }}
     {% else %}
       — <strong>not present in this token.</strong>
     {% endif %}
   </p>
 
   {% if role_trace %}
-  <div>
+  <div class="trace">
     {% for step in role_trace %}
-    <div class="trace-row">
-      <span class="muted">#{{ step.rule }}</span>
+    <div class="trace-row {% if step.matched %}matched{% endif %}">
+      <span class="trace-index">#{{ step.rule }}</span>
       <span class="mono">{{ step.operator }} "{{ step.value }}"</span>
       <span>→ {{ step.role }}</span>
-      <span style="margin-left:auto;">
+      <span class="trace-outcome">
         {% if step.matched %}
           <span class="trace-match">matched on "{{ step.matched_on }}"</span>
         {% else %}
@@ -70,7 +155,7 @@
   {% endif %}
 
   {% if not claim_lookup.found and claim_lookup.available_claims %}
-  <p class="field-help">
+  <p class="help">
     Claims that <em>are</em> present: {{ claim_lookup.available_claims | join(', ') }}.
     If group membership should be here, check the token or claims configuration
     at the provider — many will not emit groups unless asked.
@@ -79,48 +164,64 @@
 </div>
 {% endif %}
 
-{% if notable_claims %}
+{% if policy_signals %}
 <div class="card">
-  <h3>Conditional Access signals</h3>
-  <div class="table-scroll">
-    <table>
-      <tr><th>Claim</th><th>Value</th><th>What it tells you</th></tr>
-      {% for claim in notable_claims %}
-      <tr class="claim-row">
-        <td>{{ claim.name }}</td>
-        <td class="mono">{{ claim.value }}</td>
-        <td class="muted">{{ claim.description }}</td>
-      </tr>
-      {% endfor %}
+  <h3>Policy signals</h3>
+  <p class="muted small">
+    The claims an access policy is usually written against.
+  </p>
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr><th>Claim</th><th>Value</th><th>What it tells you</th></tr>
+      </thead>
+      <tbody>
+        {% for claim in policy_signals %}
+        <tr>
+          <td data-label="Claim" class="claim-name">{{ claim.name }}</td>
+          <td data-label="Value" class="mono">{{ claim.value }}</td>
+          <td data-label="Meaning" class="muted">{{ claim.description }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
-  <p class="field-help">
-    Recorded source address for this session: <code>{{ session.client_ip or 'unknown' }}</code>.
-    If that does not match the <code>ipaddr</code> claim, the app is probably
-    behind a proxy that is not forwarding the client address.
+  <p class="help">
+    Source address recorded for this session: <code>{{ session.client_ip or 'unknown' }}</code>.
+    If that does not match the <code>ipaddr</code> claim, this app is probably behind
+    a proxy that is not forwarding the client address — and source IP is a policy
+    condition, so it would be evaluated against the wrong value.
   </p>
 </div>
 {% endif %}
 
-{% if connection and connection.protocol == 'oidc' %}
+{% if retest_presets %}
 <div class="card">
   <h3>Re-test authentication</h3>
   <p class="muted small">
-    Trigger a fresh authorization request with stronger requirements, without
-    changing the saved connection. Use these to check that a policy actually
-    challenges rather than silently passing.
+    Start a fresh sign-in with stronger requirements, without changing the saved
+    connection. These are <em>requests</em> — whether the provider honours,
+    challenges, or ignores each one is the test result.
   </p>
-  <div class="btn-row">
-    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login">Force re-authentication</a>
-    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login&amp;acr_values=mfa">Request MFA context</a>
-    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=select_account">Pick a different account</a>
+  <div class="preset-list">
+    {% for preset in retest_presets %}
+    <a class="preset" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login?{{ preset.query }}">
+      <span class="preset-name">{{ preset.label }}</span>
+      <span class="preset-help">{{ preset.help }}</span>
+    </a>
+    {% endfor %}
   </div>
 </div>
-{% elif connection and connection.protocol == 'saml' %}
+{% elif connection and connection.protocol == 'mtls' %}
 <div class="card">
   <h3>Re-test authentication</h3>
+  <p class="muted small">
+    Certificate sign-in has no re-authentication parameters: the certificate is
+    presented again on every TLS handshake. To test a different certificate,
+    close the browser (or clear its certificate selection) and sign in again.
+  </p>
   <div class="btn-row">
-    <a class="btn btn-quiet" href="/auth/saml/{{ connection.slug }}/login?force_authn=1">Force re-authentication (ForceAuthn)</a>
+    <a class="btn btn-quiet" href="/auth/mtls/{{ connection.slug }}/inspect">Inspect what was presented</a>
   </div>
 </div>
 {% endif %}
@@ -128,30 +229,35 @@
 <div class="card">
   <h3>Everything the provider asserted</h3>
   <pre>{{ claims | pretty_json }}</pre>
-  <p class="field-help">
-    The complete claim set or SAML attribute statement, unmodified. This is
-    what role mapping reads from.
+  <p class="help">
+    The complete claim set, SAML attribute statement, or certificate contents,
+    unmodified. This is what role mapping reads from.
   </p>
 </div>
 
 <div class="card">
   <h3>Sign out</h3>
-  <div class="btn-row">
+  <div class="btn-row btn-row-tight">
     <form method="post" action="/logout" class="inline">
       <button type="submit" class="btn-quiet">Sign out of this app</button>
     </form>
-    {% if session.protocol != 'local' %}
+    {% if session.protocol in ('oidc', 'saml') %}
     <form method="post" action="/logout" class="inline">
       <input type="hidden" name="federated" value="1" />
       <button type="submit">Sign out everywhere (federated)</button>
     </form>
     {% endif %}
   </div>
-  {% if session.protocol != 'local' %}
-  <p class="field-help">
+  {% if session.protocol in ('oidc', 'saml') %}
+  <p class="help">
     A local sign-out leaves your provider session intact, so signing back in
     completes silently. Federated sign-out ends the session at the provider too —
     that is the one you want between policy tests.
+  </p>
+  {% elif session.protocol == 'mtls' %}
+  <p class="help">
+    There is no federated sign-out for a certificate: the browser will offer the
+    same certificate again on the next handshake unless you clear its selection.
   </p>
   {% endif %}
 </div>
@@ -159,24 +265,24 @@
 {% if session.role in ('admin', 'power') and recent_events %}
 <div class="card">
   <h3>Recent activity</h3>
-  <div class="table-scroll">
-    <table>
-      <tr><th>Time</th><th>Event</th><th>Outcome</th><th>Summary</th></tr>
-      {% for event in recent_events %}
-      <tr>
-        <td class="mono">{{ event.at.strftime('%H:%M:%S') }}</td>
-        <td>{{ event.kind }}</td>
-        <td><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
-        <td class="muted">{{ event.summary }}</td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr><th>Time</th><th>Event</th><th>Outcome</th><th>Summary</th></tr>
+      </thead>
+      <tbody>
+        {% for event in recent_events %}
+        <tr>
+          <td data-label="Time" class="mono">{{ event.at.strftime('%H:%M:%S') }}</td>
+          <td data-label="Event">{{ event.kind }}</td>
+          <td data-label="Outcome"><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
+          <td data-label="Summary" class="muted">{{ event.summary }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
-  <p class="field-help"><a href="/admin/events">Full activity log →</a></p>
+  <p class="help"><a href="/admin/events">Full activity log →</a></p>
 </div>
 {% endif %}
-{% endblock %}
-
-{% block scripts %}
-<script src="/static/app.js"></script>
 {% endblock %}

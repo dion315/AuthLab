@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ui %}
+{% set active_nav = 'admin' %}
+{% block title %}Issued certificate{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <p class="breadcrumb"><a href="/admin/connections/{{ connection.id }}">← {{ connection.name }}</a></p>
+  <h1>Test certificate issued</h1>
+  <p class="lead">Shown once. Nothing on this page is stored.</p>
+</div>
+
+{% call ui.alert('warn', 'Test material') %}
+<p>
+  This certificate was issued by a CA this app generated for testing. It is not
+  trusted by anything else, and it is not a substitute for a credential from
+  your own PKI.
+</p>
+{% endcall %}
+
+<div class="card">
+  <h3>Use it in a browser</h3>
+  <p class="muted small">
+    Download a PKCS#12 bundle and import it into the operating system or browser
+    certificate store, then open the sign-in page over HTTPS. The browser will
+    offer this certificate when the proxy asks for one.
+  </p>
+  <form method="post" action="/admin/certificates/pkcs12">
+    <input type="hidden" name="certificate_pem" value="{{ certificate_pem }}" />
+    <input type="hidden" name="key_pem" value="{{ key_pem }}" />
+    <input type="hidden" name="ca_pem" value="{{ ca_pem }}" />
+    <div class="grid-tight">
+      <div class="field">
+        <label for="friendly_name">Friendly name</label>
+        <input type="text" id="friendly_name" name="friendly_name"
+               value="{{ described.subject_cn or 'authlab-test-user' }}" />
+      </div>
+      <div class="field">
+        <label for="password">Import password</label>
+        <input type="text" id="password" name="password" value="{{ suggested_password }}" required
+               minlength="6" />
+        <p class="help">
+          Write this down — the import will ask for it. A password is required
+          because some systems refuse to import an unprotected .p12 at all.
+        </p>
+      </div>
+    </div>
+    <div class="btn-row btn-row-tight">
+      <button type="submit">{{ ui.icon('download') }} Download .p12</button>
+    </div>
+  </form>
+</div>
+
+{% if described.ok %}
+<div class="card">
+  <h3>What it contains</h3>
+  <dl class="kv">
+    <dt>Subject</dt><dd class="mono">{{ described.subject }}</dd>
+    <dt>Issuer</dt><dd class="mono">{{ described.issuer }}</dd>
+    <dt>Serial number</dt><dd class="mono">{{ described.serial_number }}</dd>
+    <dt>Valid from</dt><dd class="mono">{{ described.not_before }}</dd>
+    <dt>Valid to</dt>
+    <dd class="mono">
+      {{ described.not_after }}
+      {% if described.expired %}<span class="badge badge-danger">already expired — on purpose</span>
+      {% elif described.not_yet_valid %}<span class="badge badge-warn">not valid yet — on purpose</span>
+      {% endif %}
+    </dd>
+    {% if described.san_upn %}<dt>SAN — UPN</dt><dd class="mono">{{ described.san_upn | join(', ') }}</dd>{% endif %}
+    {% if described.san_email %}<dt>SAN — email</dt><dd class="mono">{{ described.san_email | join(', ') }}</dd>{% endif %}
+    <dt>Extended key usage</dt><dd class="mono">{{ described.extended_key_usage | join(', ') }}</dd>
+    <dt>SHA-256 thumbprint</dt><dd class="mono">{{ described.thumbprint_sha256 }}</dd>
+  </dl>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Certificate (PEM)</h3>
+  <p class="muted small">
+    For a proxy that needs the client certificate, or to paste into the tester on
+    the connection page.
+  </p>
+  <div class="field">
+    <textarea id="cert-pem" readonly>{{ certificate_pem }}</textarea>
+    <div class="btn-row btn-row-tight">
+      <button type="button" class="btn-quiet btn-sm" data-copy-target="cert-pem">Copy certificate</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Private key (PEM)</h3>
+  {% call ui.alert('warn') %}
+  <p>Shown once and not stored. If you need it, copy it now.</p>
+  {% endcall %}
+  <div class="field">
+    <textarea id="key-pem" readonly>{{ key_pem }}</textarea>
+    <div class="btn-row btn-row-tight">
+      <button type="button" class="btn-quiet btn-sm" data-copy-target="key-pem">Copy private key</button>
+    </div>
+  </div>
+</div>
+
+<div class="btn-row">
+  <a class="btn btn-quiet" href="/admin/connections/{{ connection.id }}">Back to the connection</a>
+</div>
+{% endblock %}

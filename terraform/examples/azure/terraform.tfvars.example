@@ -17,3 +17,8 @@ bootstrap_admin_password = ""
 # Leave empty for the first apply. Then set it to the app_url output and apply
 # again so OIDC redirect URIs and the SCIM tenant URL are right.
 base_url_override = ""
+
+# Ask the browser for a client certificate so certificate-based sign-in can be
+# tested. The certificate arrives as x-forwarded-client-cert, which is the
+# default header on a client-certificate connection in the app.
+# client_certificate_mode = "accept"

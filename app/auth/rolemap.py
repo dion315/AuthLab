@@ -106,11 +106,17 @@ def resolve_role(
 def describe_claim_lookup(
     connection: IdpConnection, claims: dict[str, Any]
 ) -> dict[str, Any]:
-    """Diagnostics for the dashboard: what we looked for and what we found."""
-    values = extract_claim(claims, connection.role_claim)
+    """Diagnostics for the dashboard: what we looked for and what we found.
+
+    The values key is deliberately not called "values": Jinja resolves
+    `mapping.values` to the dict's own method before it looks for a key of that
+    name, so a template rendering it gets a bound builtin and fails at the
+    filter rather than at the lookup.
+    """
+    found_values = extract_claim(claims, connection.role_claim)
     return {
         "claim": connection.role_claim,
-        "found": bool(values),
-        "values": values,
+        "found": bool(found_values),
+        "found_values": found_values,
         "available_claims": sorted(claims.keys()),
     }

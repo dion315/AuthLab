@@ -12,7 +12,13 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.schemas import SECRET_FIELDS, SETTINGS_MODELS, OidcSettings, SamlSettings
+from app.auth.schemas import (
+    SECRET_FIELDS,
+    SETTINGS_MODELS,
+    MtlsSettings,
+    OidcSettings,
+    SamlSettings,
+)
 from app.config import get_settings
 from app.crypto import decrypt, encrypt, is_encrypted
 from app.models import IdpConnection
@@ -22,7 +28,7 @@ from app.models import IdpConnection
 SECRET_PLACEHOLDER = "********"  # noqa: S105
 
 
-def load_settings(connection: IdpConnection) -> OidcSettings | SamlSettings:
+def load_settings(connection: IdpConnection) -> OidcSettings | SamlSettings | MtlsSettings:
     """Parsed protocol settings with secrets decrypted, ready to use."""
     model = SETTINGS_MODELS[connection.protocol]
     raw = dict(connection.config or {})
@@ -123,6 +129,14 @@ def sls_url(slug: str) -> str:
 
 def metadata_url(slug: str) -> str:
     return f"{get_settings().base_url.rstrip('/')}/auth/saml/{slug}/metadata"
+
+
+def mtls_login_url(slug: str) -> str:
+    return f"{get_settings().base_url.rstrip('/')}/auth/mtls/{slug}/login"
+
+
+def mtls_inspect_url(slug: str) -> str:
+    return f"{get_settings().base_url.rstrip('/')}/auth/mtls/{slug}/inspect"
 
 
 def scim_base_url() -> str:

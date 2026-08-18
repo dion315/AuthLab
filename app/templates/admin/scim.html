@@ -1,71 +1,89 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ui %}
 {% set active_nav = 'scim' %}
-{% block title %}SCIM{% endblock %}
+{% block title %}Provisioning{% endblock %}
 
 {% block content %}
-<h1>SCIM provisioning</h1>
-<p class="muted small">Inbound SCIM 2.0. Your identity provider pushes users and groups here on its own schedule.</p>
+<div class="page-header">
+  <h1>SCIM provisioning</h1>
+  <p class="lead">
+    Inbound SCIM 2.0. Your identity provider pushes users and groups here on its
+    own schedule.
+  </p>
+</div>
 
 {% if new_token %}
-<div class="flash flash-ok">
-  <strong>New provisioning token — copy it now.</strong>
-  Only a hash is stored, so this is the only time it can be shown.
-  <div class="copyable" style="margin-top:10px;">
+  {% call ui.alert('ok', 'New provisioning token — copy it now') %}
+  <p>Only a hash is stored, so this is the only time it can be shown.</p>
+  <div class="copyable">
     <input type="text" id="new-token" value="{{ new_token }}" readonly />
     <button type="button" class="btn-quiet" data-copy-target="new-token">Copy</button>
   </div>
-</div>
+  {% endcall %}
 {% endif %}
 
 <div class="card">
   <h3>Endpoint</h3>
-  <label for="scim-url">Tenant URL / base URL</label>
-  <div class="copyable">
-    <input type="text" id="scim-url" value="{{ scim_base_url }}" readonly />
-    <button type="button" class="btn-quiet" data-copy-target="scim-url">Copy</button>
+  <div class="field">
+    <label for="scim-url">Tenant URL / base URL</label>
+    <div class="copyable">
+      <input type="text" id="scim-url" value="{{ scim_base_url }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="scim-url">Copy</button>
+    </div>
+    <p class="help">
+      Paste this as the tenant URL in your provider's provisioning configuration,
+      with a token from below as the secret. A connection test calls
+      <code>GET /ServiceProviderConfig</code>, which is implemented — along with
+      <code>/ResourceTypes</code> and <code>/Schemas</code>.
+    </p>
   </div>
-  <p class="field-help">
-    Paste this as the tenant URL in your provider's provisioning configuration,
-    with a token from below as the secret. A connection test calls
-    <code>GET /ServiceProviderConfig</code>, which is implemented — along with
-    <code>/ResourceTypes</code> and <code>/Schemas</code>.
-  </p>
 </div>
 
 <div class="card">
   <h3>Provisioning clients</h3>
   {% if clients %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>Name</th><th>Token</th><th>Status</th><th>Last used</th><th></th></tr>
-      {% for client in clients %}
-      <tr>
-        <td><strong>{{ client.name }}</strong></td>
-        <td class="mono">{{ client.token_hint }}…</td>
-        <td>{% if client.enabled %}<span class="badge ok">enabled</span>{% else %}<span class="badge">disabled</span>{% endif %}</td>
-        <td class="muted">{{ client.last_used_at.strftime('%Y-%m-%d %H:%M') if client.last_used_at else 'never' }}</td>
-        <td style="text-align:right;">
-          {% if not read_only %}
-          <form method="post" action="/admin/scim/clients/{{ client.id }}/delete" class="inline">
-            <button type="submit" class="btn-quiet">Revoke</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr><th>Name</th><th>Token</th><th>Status</th><th>Last used</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for client in clients %}
+        <tr>
+          <td data-label="Name"><strong>{{ client.name }}</strong></td>
+          <td data-label="Token" class="mono">{{ client.token_hint }}…</td>
+          <td data-label="Status">
+            {% if client.enabled %}<span class="badge ok">enabled</span>
+            {% else %}<span class="badge">disabled</span>{% endif %}
+          </td>
+          <td data-label="Last used" class="muted">
+            {{ client.last_used_at.strftime('%Y-%m-%d %H:%M') if client.last_used_at else 'never' }}
+          </td>
+          <td data-label="Actions" class="right">
+            {% if not read_only %}
+            <form method="post" action="/admin/scim/clients/{{ client.id }}/delete" class="inline">
+              <button type="submit" class="btn-quiet btn-sm">Revoke</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
   {% else %}
-  <p class="muted small">No tokens yet. Create one for each provider that will provision into this app.</p>
+  <div class="empty">No tokens yet. Create one for each provider that will provision into this app.</div>
   {% endif %}
 
   {% if not read_only %}
   <form method="post" action="/admin/scim/clients">
-    <label for="client-name">New client name</label>
-    <input type="text" id="client-name" name="name" placeholder="Entra ID — contoso.com" required />
-    <div class="btn-row"><button type="submit">Generate token</button></div>
+    <div class="field">
+      <label for="client-name">New client name</label>
+      <input type="text" id="client-name" name="name" placeholder="Entra ID — contoso.com" required />
+    </div>
+    <div class="btn-row btn-row-tight"><button type="submit">Generate token</button></div>
   </form>
-  <p class="field-help">
+  <p class="help">
     One token per provider means a provisioning call can be attributed to a
     specific system, and one can be revoked without breaking the others.
   </p>
@@ -75,77 +93,87 @@
 <div class="card">
   <h3>Provisioned users ({{ users|length }})</h3>
   {% if users %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>userName</th><th>Display name</th><th>Email</th><th>Active</th><th>Groups</th><th></th></tr>
-      {% for user in users %}
-      <tr>
-        <td class="mono">{{ user.user_name }}</td>
-        <td>{{ user.display_name }}</td>
-        <td class="muted">{{ user.email }}</td>
-        <td>
-          {% if user.active %}<span class="badge ok">active</span>
-          {% else %}<span class="badge denied">inactive</span>{% endif %}
-        </td>
-        <td class="muted">{{ user.groups | map(attribute='display_name') | join(', ') or '—' }}</td>
-        <td style="text-align:right;"><a href="/admin/scim/users/{{ user.id }}">Inspect</a></td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead>
+        <tr><th>userName</th><th>Display name</th><th>Email</th><th>Active</th><th>Groups</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td data-label="userName" class="mono">{{ user.user_name }}</td>
+          <td data-label="Display name">{{ user.display_name }}</td>
+          <td data-label="Email" class="muted">{{ user.email }}</td>
+          <td data-label="Active">
+            {% if user.active %}<span class="badge ok">active</span>
+            {% else %}<span class="badge denied">inactive</span>{% endif %}
+          </td>
+          <td data-label="Groups" class="muted">
+            {{ user.groups | map(attribute='display_name') | join(', ') or '—' }}
+          </td>
+          <td data-label="Actions" class="right"><a href="/admin/scim/users/{{ user.id }}">Inspect</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
   {% else %}
-  <p class="muted small">
+  <div class="empty">
     Nothing provisioned yet. Providers sync on their own schedule — Entra ID runs
     roughly every 40 minutes, so do not expect an immediate result after
     assigning a user.
-  </p>
+  </div>
   {% endif %}
 </div>
 
 <div class="card">
   <h3>Provisioned groups ({{ groups|length }})</h3>
   {% if groups %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>Display name</th><th>External ID</th><th>Members</th></tr>
-      {% for group in groups %}
-      <tr>
-        <td><strong>{{ group.display_name }}</strong></td>
-        <td class="mono muted">{{ group.external_id or '—' }}</td>
-        <td class="muted">{{ group.members | map(attribute='user_name') | join(', ') or 'none' }}</td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>Display name</th><th>External ID</th><th>Members</th></tr></thead>
+      <tbody>
+        {% for group in groups %}
+        <tr>
+          <td data-label="Display name"><strong>{{ group.display_name }}</strong></td>
+          <td data-label="External ID" class="mono muted">{{ group.external_id or '—' }}</td>
+          <td data-label="Members" class="muted">
+            {{ group.members | map(attribute='user_name') | join(', ') or 'none' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
   {% else %}
-  <p class="muted small">No groups yet.</p>
+  <div class="empty">No groups yet.</div>
   {% endif %}
 </div>
 
 <div class="card">
   <h3>Recent provisioning requests</h3>
   {% if scim_events %}
-  <div class="table-scroll">
-    <table>
-      <tr><th>Time</th><th>Outcome</th><th>Summary</th><th>Client</th></tr>
-      {% for event in scim_events %}
-      <tr>
-        <td class="mono">{{ event.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-        <td><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
-        <td class="muted">{{ event.summary }}</td>
-        <td class="muted">{{ event.subject or '—' }}</td>
-      </tr>
-      {% endfor %}
+  <div class="table-wrap">
+    <table class="responsive">
+      <thead><tr><th>Time</th><th>Outcome</th><th>Summary</th><th>Client</th></tr></thead>
+      <tbody>
+        {% for event in scim_events %}
+        <tr>
+          <td data-label="Time" class="mono">{{ event.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td data-label="Outcome"><span class="badge {{ event.outcome }}">{{ event.outcome }}</span></td>
+          <td data-label="Summary" class="muted">{{ event.summary }}</td>
+          <td data-label="Client" class="muted">{{ event.subject or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
     </table>
   </div>
-  <p class="field-help">
+  <p class="help">
     This is the fastest way to see the exact request shapes your provider sends,
     which is what you need when a mapping is not landing where you expect.
   </p>
   {% else %}
-  <p class="muted small">No provisioning requests recorded yet.</p>
+  <div class="empty">No provisioning requests recorded yet.</div>
   {% endif %}
 </div>
 {% endblock %}
-
-{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

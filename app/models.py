@@ -51,8 +51,8 @@ DEFAULT_ROLE = "user"
 class LocalUser(Base):
     """A username/password account that does not depend on any IdP.
 
-    This exists so you can never lock yourself out. If a Conditional Access
-    policy blocks your federated sign-in — which, when testing CA policies, is
+    This exists so you can never lock yourself out. If an access policy at your
+    provider blocks federated sign-in — which, when testing policies, is
     frequently the *intended* outcome — you still need a way back in to change
     the configuration that locked you out.
     """
@@ -241,7 +241,7 @@ class UserSession(Base):
 class AuthEvent(Base):
     """Append-only record of every authentication and provisioning event.
 
-    This is the actual product of a Conditional Access test. A policy that
+    This is the actual product of an access policy test. A policy that
     blocks a sign-in produces an error at the IdP, a redirect back, and a
     specific error code — all of which are worth keeping and diffing against
     the next attempt. Without this the result of a test is a screenshot.

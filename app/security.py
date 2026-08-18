@@ -73,9 +73,9 @@ def client_ip(request: Request) -> str:
     """Resolve the caller's IP.
 
     Behind a cloud load balancer the socket peer is the balancer, and the real
-    client only appears in X-Forwarded-For. Source IP is a Conditional Access
-    condition, so this needs to be right or the app misreports where sign-ins
-    came from. Only trusted when TRUST_PROXY_HEADERS is on, because the header
+    client only appears in X-Forwarded-For. Source IP is a condition in every
+    access policy engine, so this needs to be right or the app misreports where
+    sign-ins came from. Only trusted when TRUST_PROXY_HEADERS is on, because the header
     is caller-supplied and trivially spoofed when nothing strips it.
     """
     settings = get_settings()
