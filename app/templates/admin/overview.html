@@ -25,7 +25,7 @@
           {% if connection.enabled %}<span class="badge ok">enabled</span>
           {% else %}<span class="badge">disabled</span>{% endif %}
         </td>
-        <td style="text-align:right;">
+        <td class="align-right">
           <a href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login">Test sign-in</a>
           {% if not read_only %} · <a href="/admin/connections/{{ connection.id }}">Edit</a>{% endif %}
         </td>
@@ -72,6 +72,31 @@
     <div class="btn-row">
       {% if not read_only %}<a class="btn btn-quiet" href="/admin/users">Local accounts</a>{% endif %}
       {% if not read_only %}<a class="btn btn-quiet" href="/admin/sessions">Active sessions</a>{% endif %}
+      {% if not read_only %}<a class="btn btn-quiet" href="/admin/sessions/compare">Compare sessions</a>{% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Service &amp; API access</h3>
+    <p class="muted small">
+      Validate an access token the way a resource server would, or run a
+      client_credentials grant — the application-to-application path no browser
+      flow exercises.
+    </p>
+    <div class="btn-row">
+      {% if not read_only %}<a class="btn btn-quiet" href="/admin/service-access">Open</a>{% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Automation</h3>
+    <p class="muted small">
+      API tokens, evidence export, and connection import/export — everything
+      this console does, without a browser.
+    </p>
+    <div class="btn-row">
+      {% if not read_only %}<a class="btn btn-quiet" href="/admin/automation">Open</a>{% endif %}
+      <a class="btn btn-quiet" href="/api/admin/events?format=csv&amp;limit=1000">Export events (CSV)</a>
     </div>
   </div>
 </div>

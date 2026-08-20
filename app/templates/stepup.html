@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% set active_nav = 'dashboard' %}
+{% block title %}Step-up{% endblock %}
+
+{% block content %}
+<h1>Protected action</h1>
+<p class="muted small"><a href="/dashboard">← Dashboard</a></p>
+
+{% if not connection %}
+<div class="card">
+  <div class="flash flash-warn">
+    You are signed in with the local account, which never involves an identity
+    provider and therefore has no authentication context to step up. Sign in
+    through a connection to test this.
+  </div>
+</div>
+
+{% elif not result.configured %}
+<div class="card">
+  <h3>No step-up condition configured</h3>
+  <p class="muted small">
+    This page gates an action on the authentication context the provider
+    asserted — the pattern behind an Entra ID authentication context or a
+    step-up <code>acr_values</code> request. Set a condition on the connection
+    to try it.
+  </p>
+  <div class="btn-row">
+    <a class="btn btn-quiet" href="/admin/connections/{{ connection.id }}">Configure on {{ connection.name }}</a>
+  </div>
+</div>
+
+{% elif result.satisfied %}
+<div class="card">
+  <h3>Action permitted <span class="badge ok">context satisfied</span></h3>
+  <p class="muted small">
+    The provider asserted <code>{{ result.claim }}</code> containing
+    <strong>{{ result.matched_on }}</strong>, which satisfies the required
+    condition <code>{{ result.claim }} {{ result.operator }} {{ result.required }}</code>.
+  </p>
+  <p class="field-help">
+    This is the evidence that the policy actually applied. A page that simply
+    renders without checking anything proves nothing — what matters is that the
+    condition was evaluated and the token carried the value.
+  </p>
+  <div class="btn-row">
+    <a class="btn btn-quiet" href="/auth/{{ connection.protocol }}/{{ connection.slug }}/login?prompt=login&amp;return_to=/step-up">
+      Re-authenticate and check again
+    </a>
+  </div>
+</div>
+
+{% else %}
+<div class="card">
+  <h3>Additional authentication required</h3>
+  <p class="muted small">
+    This action requires <code>{{ result.claim }} {{ result.operator }} {{ result.required }}</code>.
+    {% if result.found_values %}
+    Your session carries <code>{{ result.claim }}</code> =
+    <strong>{{ result.found_values | join(', ') }}</strong>, which does not satisfy it.
+    {% else %}
+    Your session carries no <code>{{ result.claim }}</code> claim at all.
+    {% endif %}
+  </p>
+
+  <div class="btn-row">
+    <a class="btn" href="{{ challenge_url }}">Satisfy the requirement</a>
+  </div>
+
+  <p class="field-help">
+    The challenge sends you back to the provider with
+    {% if connection.stepup_acr_values %}<code>acr_values={{ connection.stepup_acr_values }}</code>{% endif %}
+    {% if connection.stepup_claims_challenge %} and a <code>claims</code> challenge{% endif %}
+    plus <code>prompt=login</code>. The prompt matters: without it a provider
+    with a live session will often return the existing context unchanged and
+    the test passes without anything having been challenged.
+  </p>
+
+  {% if result.found_values %}
+  <p class="field-help">
+    If the provider returns the same values again, the policy did not apply to
+    this request. Check that the authentication context is assigned to a
+    Conditional Access policy and that the policy targets this application.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app import events
 from app.auth import connections as conn
-from app.auth import flowstate, oidc, saml
+from app.auth import expectations, flowstate, oidc, saml, scimlink
 from app.auth.rolemap import resolve_role
 from app.config import get_settings
 from app.db import get_db
@@ -31,6 +31,7 @@ from app.deps import current_session
 from app.models import LocalUser, UserSession
 from app.ratelimit import check as ratelimit_check
 from app.ratelimit import record_failure, reset
+from app.redirects import safe_path
 from app.security import (
     clear_session_cookie,
     client_ip,
@@ -38,11 +39,43 @@ from app.security import (
     hash_password,
     needs_rehash,
     revoke_session,
+    revoke_sessions_for_user,
     verify_password,
 )
 from app.templating import templates
 
 router = APIRouter()
+
+
+def _post_login_role(
+    db: Session, connection: Any, claims: dict[str, Any]
+) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """Resolve the role for a fresh sign-in, including SCIM group membership.
+
+    The SCIM lookup happens here rather than inside `resolve_role` so that the
+    rule engine stays a pure function of its inputs. Identifiers come from the
+    claims because there is no session yet to read them from.
+    """
+    scim_groups: list[str] = []
+    if (connection.role_source or "claims") != "claims":
+        identifiers = [
+            str(claims.get(connection.subject_claim) or ""),
+            str(claims.get(connection.email_claim) or ""),
+            str(claims.get("preferred_username") or ""),
+            str(claims.get("upn") or ""),
+        ]
+        scim_groups = scimlink.group_names(scimlink.find_scim_user(db, *identifiers))
+
+    role, trace = resolve_role(connection, claims, scim_groups)
+    return role, trace, scim_groups
+
+
+def _record_expectations(
+    connection: Any, claims: dict[str, Any], role: str
+) -> tuple[dict[str, Any], str]:
+    """Evaluate a connection's expectations and produce a log-friendly summary."""
+    result = expectations.evaluate(connection, claims, role)
+    return result, expectations.summarise(result)
 
 
 def _login_error(
@@ -202,10 +235,22 @@ async def oidc_login(
     # dashboard: /auth/oidc/{slug}/login?prompt=login&acr_values=mfa
     extra_prompt = request.query_params.get("prompt", "")
     extra_acr = request.query_params.get("acr_values", "")
+    extra_claims = request.query_params.get("claims", "")
+    raw_max_age = request.query_params.get("max_age", "")
+    extra_max_age = int(raw_max_age) if raw_max_age.isdigit() else None
+
+    # Where to land after the round trip. Validated as a local path before it
+    # goes anywhere near a cookie, because this is a sign-in endpoint and an
+    # open redirect here is worth more to an attacker than almost anywhere else.
+    return_to = safe_path(request.query_params.get("return_to"))
 
     try:
         url, flow = await oidc.build_authorization_request(
-            connection, extra_prompt=extra_prompt, extra_acr=extra_acr
+            connection,
+            extra_prompt=extra_prompt,
+            extra_acr=extra_acr,
+            extra_claims=extra_claims,
+            extra_max_age=extra_max_age,
         )
     except oidc.OidcError as exc:
         # Caught, not raised: a bad issuer is a configuration mistake to be
@@ -235,9 +280,15 @@ async def oidc_login(
         request=request,
         connection_slug=slug,
         protocol="oidc",
-        detail={"prompt": extra_prompt, "acr_values": extra_acr},
+        detail={
+            "prompt": extra_prompt,
+            "acr_values": extra_acr,
+            "claims_challenge": bool(extra_claims),
+            "max_age": extra_max_age,
+        },
     )
 
+    flow["return_to"] = return_to
     response = RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
     flowstate.set_flow(response, "oidc", slug, flow)
     return response
@@ -369,12 +420,14 @@ async def oidc_callback(
             status_code=status.HTTP_403_FORBIDDEN if exc.code else status.HTTP_502_BAD_GATEWAY,
         )
 
-    role, trace = resolve_role(connection, claims)
+    role, trace, scim_groups = _post_login_role(db, connection, claims)
     subject = str(claims.get(connection.subject_claim) or claims.get("sub") or "")
     email = str(claims.get(connection.email_claim) or claims.get("preferred_username") or "")
     display = str(claims.get(connection.name_claim) or email or subject)
+    checks, checks_summary = _record_expectations(connection, claims, role)
 
-    response = RedirectResponse("/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    target = safe_path(flow.get("return_to"))
+    response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
     flowstate.clear_flow(response, "oidc", slug)
     create_session(
         db,
@@ -392,13 +445,24 @@ async def oidc_callback(
     events.record(
         db,
         kind="login_success",
-        outcome="ok",
-        summary=f"OIDC sign-in via {connection.name}",
+        # A sign-in that completed but failed its expectations is not a success
+        # worth glossing over — the activity log should show it in red.
+        outcome="ok" if checks.get("passed") is not False else "denied",
+        summary=" · ".join(
+            part
+            for part in (f"OIDC sign-in via {connection.name}", checks_summary)
+            if part
+        ),
         request=request,
         connection_slug=slug,
         protocol="oidc",
         subject=subject or email,
-        detail={"role": role, "role_trace": trace},
+        detail={
+            "role": role,
+            "role_trace": trace,
+            "scim_groups": scim_groups,
+            "expectations": checks,
+        },
     )
     return response
 
@@ -430,6 +494,7 @@ def saml_login(slug: str, request: Request, db: Session = Depends(get_db)) -> Re
         )
 
     force = request.query_params.get("force_authn", "").lower() in ("1", "true", "yes")
+    return_to = safe_path(request.query_params.get("return_to"))
 
     try:
         url, request_id = saml.build_login_url(
@@ -466,7 +531,9 @@ def saml_login(slug: str, request: Request, db: Session = Depends(get_db)) -> Re
 
     response = RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
     # Carried so InResponseTo can be checked when the assertion comes back.
-    flowstate.set_flow(response, "saml", slug, {"request_id": request_id})
+    flowstate.set_flow(
+        response, "saml", slug, {"request_id": request_id, "return_to": return_to}
+    )
     return response
 
 
@@ -526,12 +593,14 @@ async def saml_acs(slug: str, request: Request, db: Session = Depends(get_db)) -
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    role, trace = resolve_role(connection, claims)
+    role, trace, scim_groups = _post_login_role(db, connection, claims)
     subject = str(claims.get(connection.subject_claim) or claims.get("nameId") or "")
     email = str(claims.get(connection.email_claim) or subject)
     display = str(claims.get(connection.name_claim) or email or subject)
+    checks, checks_summary = _record_expectations(connection, claims, role)
 
-    response = RedirectResponse("/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    target = safe_path((flow or {}).get("return_to"))
+    response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
     flowstate.clear_flow(response, "saml", slug)
     create_session(
         db,
@@ -550,14 +619,138 @@ async def saml_acs(slug: str, request: Request, db: Session = Depends(get_db)) -
     events.record(
         db,
         kind="login_success",
-        outcome="ok",
-        summary=f"SAML sign-in via {connection.name}",
+        outcome="ok" if checks.get("passed") is not False else "denied",
+        summary=" · ".join(
+            part
+            for part in (f"SAML sign-in via {connection.name}", checks_summary)
+            if part
+        ),
         request=request,
         connection_slug=slug,
         protocol="saml",
         subject=subject or email,
-        detail={"role": role, "role_trace": trace},
+        detail={
+            "role": role,
+            "role_trace": trace,
+            "scim_groups": scim_groups,
+            "expectations": checks,
+        },
     )
+    return response
+
+
+@router.api_route("/auth/saml/{slug}/sls", methods=["GET", "POST"])
+async def saml_sls(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Single Logout Service — the other half of SAML sign-out.
+
+    The SP metadata has always advertised this endpoint, and until now nothing
+    was listening on it. Two different messages arrive here:
+
+      * a **LogoutResponse**, answering a LogoutRequest we sent. Without an
+        endpoint to receive it, SP-initiated SLO ended at the IdP and the user
+        landed on a 404 — the logout worked, but looked broken and gave no
+        confirmation that the provider had actually ended its session.
+      * a **LogoutRequest**, when the user signed out at the IdP or at another
+        application and the provider is propagating that to us. Handling this
+        is what makes single logout single: it lets an IdP-side sign-out
+        actually terminate access here.
+
+    Accepts both bindings. The redirect binding puts the message in the query
+    string; some providers use POST instead.
+    """
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "saml":
+        return _login_error(
+            request,
+            title="Unknown connection",
+            message=f"No SAML connection named '{slug}'.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    form: dict[str, str] = {}
+    if request.method == "POST":
+        form = {key: str(value) for key, value in (await request.form()).items()}
+
+    # python3-saml reads both message types out of get_data, so a POST binding
+    # message has to be presented there too.
+    request_data = _saml_request_data(request, form)
+    if form:
+        merged = dict(request_data["get_data"])
+        merged.update(form)
+        request_data["get_data"] = merged
+
+    if not (request_data["get_data"].get("SAMLRequest") or request_data["get_data"].get("SAMLResponse")):
+        return _login_error(
+            request,
+            title="Not a SAML logout message",
+            message=(
+                "This endpoint expects a SAMLRequest or SAMLResponse parameter. "
+                "It is the Single Logout Service listed in this connection's SP "
+                "metadata."
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    session = current_session(request, db)
+    flow = flowstate.read_flow(request, "saml-slo", slug)
+    request_id = (flow or {}).get("request_id")
+
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        redirect_url, name_id = await run_in_threadpool(
+            saml.process_logout, connection, request_data, request_id=request_id
+        )
+    except saml.SamlError as exc:
+        events.record(
+            db,
+            kind="logout",
+            outcome="error",
+            summary=exc.message,
+            request=request,
+            connection_slug=slug,
+            protocol="saml",
+            detail=exc.detail,
+        )
+        return _login_error(
+            request,
+            title="SAML logout message rejected",
+            message=exc.message,
+            detail=exc.detail,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    revoked = 0
+    if session is not None:
+        revoke_session(db, session.id)
+        revoked = 1
+    if name_id:
+        # IdP-initiated: the browser carrying the LogoutRequest may not be the
+        # one holding our cookie, so revoke by identity as well.
+        revoked += revoke_sessions_for_user(db, name_id)
+
+    events.record(
+        db,
+        kind="logout",
+        outcome="ok",
+        summary=(
+            f"IdP-initiated single logout; revoked {revoked} session(s)"
+            if name_id
+            else "Single logout completed at the provider"
+        ),
+        request=request,
+        connection_slug=slug,
+        protocol="saml",
+        subject=name_id or (session.subject if session else ""),
+        detail={"sessions_revoked": revoked, "idp_initiated": bool(name_id)},
+    )
+
+    # For a LogoutRequest, redirect_url carries our signed LogoutResponse back
+    # to the IdP. For a LogoutResponse there is nothing left to send.
+    target = redirect_url or "/login?message=Signed+out+everywhere"
+    response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+    flowstate.clear_flow(response, "saml-slo", slug)
+    clear_session_cookie(response)
     return response
 
 
@@ -603,6 +796,8 @@ async def logout(
         return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
 
     target = "/login"
+    slo_request_id = ""
+    slo_slug = session.source
 
     # Federated sign-out ends the session at the IdP too. Without it the next
     # sign-in completes silently and you cannot retest a policy change.
@@ -616,7 +811,7 @@ async def logout(
         connection = conn.get_by_slug(db, session.source)
         if connection is not None:
             try:
-                url = saml.build_logout_url(
+                url, slo_request_id = saml.build_logout_url(
                     connection,
                     _saml_request_data(request),
                     name_id=session.name_id,
@@ -641,6 +836,13 @@ async def logout(
     revoke_session(db, session.id)
 
     response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+    if slo_request_id:
+        # Held so the LogoutResponse arriving at /sls can be matched to the
+        # LogoutRequest we just sent, exactly as InResponseTo is validated for
+        # sign-in.
+        flowstate.set_flow(
+            response, "saml-slo", slo_slug, {"request_id": slo_request_id}
+        )
     clear_session_cookie(response)
     return response
 

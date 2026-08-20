@@ -29,8 +29,11 @@ from app.auth.router import router as auth_router
 from app.config import get_settings
 from app.db import engine, session_scope
 from app.models import Base
+from app.routes.account import router as account_router
 from app.routes.admin import router as admin_router
+from app.routes.api import router as api_router
 from app.routes.pages import router as pages_router
+from app.schema_sync import sync_schema
 from app.scim import schemas as scim_schemas
 from app.scim.router import ScimHttpError, ScimResponse
 from app.scim.router import router as scim_router
@@ -43,11 +46,18 @@ logger = logging.getLogger("authlab")
 async def lifespan(_app: FastAPI):
     settings = get_settings()
 
-    # create_all is enough for a self-contained harness whose schema only ever
-    # changes with the code. A service carrying data across versions should use
-    # Alembic instead; the models here are ordinary SQLAlchemy so that is a
-    # drop-in change.
+    # create_all builds anything missing, but it never alters a table that
+    # already exists — so an upgrade that adds a column would leave a populated
+    # database unreadable. sync_schema closes that one gap, additively. Neither
+    # is a substitute for Alembic once real data has to survive a schema
+    # change; the models here are ordinary SQLAlchemy so that is a drop-in.
     Base.metadata.create_all(bind=engine)
+    added_columns = sync_schema(engine)
+    if added_columns:
+        logger.warning(
+            "Added missing columns to an existing database: %s",
+            ", ".join(added_columns),
+        )
 
     with session_scope() as db:
         created = bootstrap_local_admin(db)
@@ -246,7 +256,9 @@ def favicon() -> Response:
 
 app.include_router(pages_router, tags=["app"])
 app.include_router(auth_router, tags=["auth"])
+app.include_router(account_router, tags=["account"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
+app.include_router(api_router, tags=["automation"])
 app.include_router(scim_router, prefix="/scim/v2", tags=["scim"])
 
 

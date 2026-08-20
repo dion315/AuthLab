@@ -4,7 +4,12 @@
 
 {% block content %}
 <h1>Active sessions</h1>
-<p class="muted small"><a href="/admin">← Admin console</a></p>
+<p class="muted small">
+  <a href="/admin">← Admin console</a> ·
+  <a href="/admin/sessions/compare">Compare two sessions</a>
+</p>
+
+{% if message %}<div class="flash flash-ok">{{ message }}</div>{% endif %}
 
 <div class="card">
   <h3>Why sessions are revocable</h3>
@@ -32,7 +37,8 @@
         <td class="mono muted">{{ row.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
         <td class="mono muted">{{ row.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
         <td class="mono muted">{{ row.client_ip or '—' }}</td>
-        <td style="text-align:right;">
+        <td class="align-right">
+          <a href="/admin/sessions/compare?a={{ row.id }}">Compare</a>
           <form method="post" action="/admin/sessions/{{ row.id }}/revoke" class="inline">
             <button type="submit" class="btn-quiet">Revoke</button>
           </form>

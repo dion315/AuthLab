@@ -103,20 +103,26 @@
     }
   });
 
-  // --- role mapping rule rows ----------------------------------------------
-  var addRule = document.getElementById("add-rule");
-  if (addRule) {
-    addRule.addEventListener("click", function () {
-      var list = document.getElementById("rule-list");
-      var template = document.getElementById("rule-template");
+  // --- repeatable form rows -------------------------------------------------
+  // Role mapping rules and expectation rows behave identically: clone a
+  // <template> onto the end of a list, and remove a row on request.
+  function wireRowAdder(buttonId, listId, templateId) {
+    var button = document.getElementById(buttonId);
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var list = document.getElementById(listId);
+      var template = document.getElementById(templateId);
       if (!list || !template) return;
       list.appendChild(template.content.cloneNode(true));
     });
-
-    document.addEventListener("click", function (event) {
-      if (!event.target.matches("[data-remove-rule]")) return;
-      var row = event.target.closest(".rule-row");
-      if (row) row.remove();
-    });
   }
+
+  wireRowAdder("add-rule", "rule-list", "rule-template");
+  wireRowAdder("add-expectation", "expectation-list", "expectation-template");
+
+  document.addEventListener("click", function (event) {
+    if (!event.target.matches("[data-remove-rule]")) return;
+    var row = event.target.closest(".rule-row");
+    if (row) row.remove();
+  });
 })();

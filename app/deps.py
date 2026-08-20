@@ -5,11 +5,17 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import UserSession
+from app.models import LocalUser, UserSession
 from app.security import read_session
+
+# Paths a user with an expired password may still reach. Without the first two
+# entries the redirect below would loop; without the third they could not sign
+# out of an account they cannot use.
+_PASSWORD_CHANGE_EXEMPT = ("/account/password", "/logout", "/static", "/healthz", "/readyz")
 
 
 def current_session(
@@ -17,6 +23,20 @@ def current_session(
 ) -> UserSession | None:
     """The signed-in session, or None. Never raises — for optional contexts."""
     return read_session(db, request)
+
+
+def _password_change_required(db: Session, session: UserSession) -> bool:
+    """True when this session belongs to a local account owing a new password.
+
+    Only local accounts can be in this state: a federated password is the
+    provider's business, not ours.
+    """
+    if session.protocol != "local" or not session.email:
+        return False
+    user = db.execute(
+        select(LocalUser).where(func.lower(LocalUser.email) == session.email.lower())
+    ).scalar_one_or_none()
+    return user is not None and user.must_change_password
 
 
 def require_login(
@@ -31,6 +51,19 @@ def require_login(
             detail="Not signed in",
             headers={"Location": "/login"},
         )
+
+    # The first-run administrator password is generated and printed to a log,
+    # which is fine for getting in once and not fine for leaving in place. The
+    # flag has always been set; this is what makes it mean something.
+    if not request.url.path.startswith(_PASSWORD_CHANGE_EXEMPT) and _password_change_required(
+        db, session
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            detail="Password change required",
+            headers={"Location": "/account/password"},
+        )
+
     return session
 
 

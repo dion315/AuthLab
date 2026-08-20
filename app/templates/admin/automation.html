@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% set active_nav = 'admin' %}
+{% block title %}Automation{% endblock %}
+
+{% block content %}
+<h1>Automation</h1>
+<p class="muted small"><a href="/admin">← Admin console</a></p>
+
+{% if message %}<div class="flash flash-ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+{% if new_token %}
+<div class="card">
+  <h3>New API token</h3>
+  <div class="flash flash-warn">
+    Copy this now. Only a hash is stored, so it cannot be shown again.
+  </div>
+  <div class="copyable">
+    <input type="text" id="new-api-token" value="{{ new_token }}" readonly />
+    <button type="button" class="btn-quiet" data-copy-target="new-api-token">Copy</button>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Why this exists</h3>
+  <p class="muted small">
+    The console is the right interface for the first hour with a new provider
+    and the wrong one afterwards. These endpoints let a pipeline export the
+    activity log as evidence, push a known connection definition before a test,
+    and check a provider's configuration without a browser.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Tokens</h3>
+  {% if tokens %}
+  <div class="table-scroll">
+    <table>
+      <tr><th>Name</th><th>Scopes</th><th>Prefix</th><th>Last used</th><th></th></tr>
+      {% for token in tokens %}
+      <tr>
+        <td><strong>{{ token.name }}</strong></td>
+        <td>
+          {% for scope in token.scopes %}<span class="badge">{{ scope }}</span> {% endfor %}
+        </td>
+        <td class="mono muted">{{ token.token_hint }}…</td>
+        <td class="mono muted">
+          {{ token.last_used_at.strftime('%Y-%m-%d %H:%M') if token.last_used_at else 'never' }}
+        </td>
+        <td class="align-right">
+          <form method="post" action="/admin/automation/tokens/{{ token.id }}/delete" class="inline">
+            <button type="submit" class="btn-quiet">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted small">No API tokens yet.</p>
+  {% endif %}
+
+  <form method="post" action="/admin/automation/tokens">
+    <label for="token-name">Name</label>
+    <input type="text" id="token-name" name="name" placeholder="CI pipeline" required />
+
+    <p class="field-help mt-sm">Scopes</p>
+    {% for scope in scopes %}
+    <div class="checkbox">
+      <input type="checkbox" id="scope-{{ loop.index }}" name="scopes" value="{{ scope }}" />
+      <label for="scope-{{ loop.index }}"><code>{{ scope }}</code></label>
+    </div>
+    {% endfor %}
+
+    <div class="btn-row"><button type="submit">Create token</button></div>
+  </form>
+  <p class="field-help">
+    Separate from SCIM provisioning tokens on purpose. A provisioning connector
+    should not be able to rewrite your identity provider configuration.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Endpoints</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Scope</th><th>What it does</th></tr>
+      <tr class="claim-row">
+        <td>GET</td><td class="mono">/api/admin/events</td><td class="mono">events:read</td>
+        <td class="muted">Activity log as JSON or CSV. <code>?format=csv&amp;kind=login_failure&amp;since_minutes=60</code></td>
+      </tr>
+      <tr class="claim-row">
+        <td>GET</td><td class="mono">/api/admin/sessions</td><td class="mono">sessions:read</td>
+        <td class="muted">Live sessions and their claims.</td>
+      </tr>
+      <tr class="claim-row">
+        <td>GET</td><td class="mono">/api/admin/connections</td><td class="mono">connections:read</td>
+        <td class="muted">Export every connection. Secrets are never included.</td>
+      </tr>
+      <tr class="claim-row">
+        <td>POST</td><td class="mono">/api/admin/connections</td><td class="mono">connections:write</td>
+        <td class="muted">Create or update from exported definitions.</td>
+      </tr>
+      <tr class="claim-row">
+        <td>POST</td><td class="mono">/api/admin/connections/{slug}/test</td><td class="mono">connections:read</td>
+        <td class="muted">Run the discovery/metadata check. Branch on <code>ok</code>, not the status code.</td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="field-help mt-md">Example</p>
+  <pre>curl -H "Authorization: Bearer $AUTHLAB_TOKEN" \
+  "{{ api_base_url }}/api/admin/events?format=csv&amp;kind=login_failure&amp;since_minutes=1440" \
+  -o evidence.csv</pre>
+
+  <p class="field-help">
+    An administrator session cookie is accepted anywhere a token is, which is
+    what lets the download links below work without a separate credential.
+  </p>
+  <div class="btn-row">
+    <a class="btn btn-quiet" href="/api/admin/events?format=csv&amp;limit=1000">Download events (CSV)</a>
+    <a class="btn btn-quiet" href="/api/admin/events?limit=1000">Download events (JSON)</a>
+    <a class="btn btn-quiet" href="/api/admin/connections">Export all connections</a>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Import a connection</h3>
+  <p class="muted small">
+    Paste a definition exported from another instance. Matching is by
+    <code>slug</code>: an existing connection is updated rather than duplicated.
+  </p>
+  <form method="post" action="/admin/connections/import">
+    <label for="definition">Connection JSON</label>
+    <textarea id="definition" name="definition" rows="8"
+              placeholder='{"connections": [{"slug": "entra", "protocol": "oidc", ...}]}'></textarea>
+    <div class="btn-row"><button type="submit">Import</button></div>
+  </form>
+  <p class="field-help">
+    Client secrets and SAML private keys are never exported, so re-enter them on
+    the connection afterwards. An import leaves an existing secret untouched.
+  </p>
+</div>
+
+{% if connections %}
+<div class="card">
+  <h3>Export individual connections</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Name</th><th>Protocol</th><th>Slug</th><th></th></tr>
+      {% for connection in connections %}
+      <tr>
+        <td><strong>{{ connection.name }}</strong></td>
+        <td><span class="badge">{{ connection.protocol|upper }}</span></td>
+        <td class="mono">{{ connection.slug }}</td>
+        <td class="align-right">
+          <a href="/admin/connections/{{ connection.id }}/export">Download JSON</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

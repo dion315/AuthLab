@@ -11,7 +11,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from fastapi import Request, Response
 from itsdangerous import BadSignature, URLSafeSerializer
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -189,23 +189,45 @@ def revoke_session(db: Session, session_id: str) -> None:
         db.commit()
 
 
-def revoke_sessions_for_subject(db: Session, subject: str) -> int:
-    """Kill every live session for a subject.
+def revoke_sessions_for_user(db: Session, *identifiers: str | None) -> int:
+    """Kill every live session belonging to any of these identifiers.
 
     Called when SCIM deactivates a user, so deprovisioning takes effect at once
     instead of whenever the session happens to expire. Demonstrating that
     difference is a big part of why anyone tests SCIM.
+
+    Matching against *several* identifiers, and against both `subject` and
+    `email`, is what makes this work for real federated sessions. SCIM
+    identifies a user by `userName` — a UPN or email address — while a session's
+    `subject` comes from the connection's `subject_claim`, which defaults to
+    `sub`. For Entra ID and several others `sub` is a pairwise pseudonymous
+    identifier scoped to the application: it is *never* equal to the UPN. A
+    revocation keyed only on subject therefore matched nothing and reported
+    "revoked 0 sessions" without complaint, which is the silent failure this
+    signature exists to prevent.
+
+    Comparison is case-insensitive because email addresses are, and providers
+    are inconsistent about the casing they assert.
     """
-    now = datetime.now(UTC)
+    wanted = {value.strip().lower() for value in identifiers if value and value.strip()}
+    if not wanted:
+        return 0
+
     rows = (
         db.execute(
             select(UserSession).where(
-                UserSession.subject == subject, UserSession.revoked_at.is_(None)
+                UserSession.revoked_at.is_(None),
+                or_(
+                    func.lower(UserSession.subject).in_(wanted),
+                    func.lower(UserSession.email).in_(wanted),
+                ),
             )
         )
         .scalars()
         .all()
     )
+
+    now = datetime.now(UTC)
     for row in rows:
         row.revoked_at = now
     if rows:

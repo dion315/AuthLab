@@ -18,10 +18,12 @@ from sqlalchemy.orm import Session
 
 from app import events
 from app.auth import connections as conn
+from app.auth import expectations, lifetimes, scimlink
 from app.auth.rolemap import describe_claim_lookup, resolve_role
 from app.db import get_db
 from app.deps import current_session, require_login
 from app.models import UserSession
+from app.routes.account import evaluate_stepup
 from app.templating import templates
 
 router = APIRouter()
@@ -98,18 +100,26 @@ def dashboard(
     session: UserSession = Depends(require_login),
 ) -> Response:
     connection = conn.get_by_slug(db, session.source) if session.source != "local" else None
+    claims = session.raw_claims or {}
 
     # Recomputed live rather than read from the session, so that editing a role
     # rule and reloading this page shows the new outcome immediately — without
     # that, testing a mapping change means a full sign-out/sign-in cycle.
     role_trace: list[dict[str, Any]] = []
     claim_lookup: dict[str, Any] = {}
+    scim_link: dict[str, Any] = {}
+    checks: dict[str, Any] = {}
+    stepup: dict[str, Any] = {"configured": False, "satisfied": False}
     current_role = session.role
-    if connection is not None:
-        current_role, role_trace = resolve_role(connection, session.raw_claims or {})
-        claim_lookup = describe_claim_lookup(connection, session.raw_claims or {})
 
-    claims = session.raw_claims or {}
+    if connection is not None:
+        scim_link = scimlink.describe(db, session)
+        scim_groups = scim_link.get("groups", [])
+        current_role, role_trace = resolve_role(connection, claims, scim_groups)
+        claim_lookup = describe_claim_lookup(connection, claims, scim_groups)
+        checks = expectations.evaluate(connection, claims, current_role)
+        stepup = evaluate_stepup(connection, claims)
+
     notable = [
         {"name": name, "value": claims[name], "description": description}
         for name, description in NOTABLE_CLAIMS.items()
@@ -126,9 +136,15 @@ def dashboard(
             "notable_claims": notable,
             "role_trace": role_trace,
             "claim_lookup": claim_lookup,
+            "scim_link": scim_link,
+            "checks": checks,
+            "stepup": stepup,
+            "lifetimes": lifetimes.describe(claims, session),
+            "session_outlives_token": lifetimes.outlives_token(claims, session),
             "role_drifted": current_role != session.role,
             "current_role": current_role,
             "recent_events": events.recent(db, limit=15),
+            "message": request.query_params.get("message", ""),
         },
     )
 

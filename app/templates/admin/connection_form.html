@@ -27,6 +27,17 @@
     <button type="button" class="btn-quiet" data-copy-target="url-acs">Copy</button>
   </div>
 
+  <label for="url-sls">Single Logout Service (SLS) URL</label>
+  <div class="copyable">
+    <input type="text" id="url-sls" value="{{ urls.sls_url }}" readonly />
+    <button type="button" class="btn-quiet" data-copy-target="url-sls">Copy</button>
+  </div>
+  <p class="field-help">
+    Where the provider sends its LogoutResponse, and where it sends a
+    LogoutRequest when the user signs out elsewhere. Register it to make single
+    logout actually terminate the session here.
+  </p>
+
   <label for="url-metadata">SP metadata URL</label>
   <div class="copyable">
     <input type="text" id="url-metadata" value="{{ urls.metadata_url }}" readonly />
@@ -34,7 +45,7 @@
   </div>
   <p class="field-help">
     Most IdP consoles can import this metadata URL and fill in the entity ID,
-    ACS URL, and NameID format for you.
+    ACS URL, SLS URL, and NameID format for you.
   </p>
   {% endif %}
 
@@ -43,6 +54,7 @@
       <button type="submit" class="btn-quiet">Test configuration</button>
     </form>
     <a class="btn btn-quiet" href="{{ urls.login_url }}">Try a sign-in</a>
+    <a class="btn btn-quiet" href="{{ urls.export_url }}">Export as JSON</a>
   </div>
 </div>
 {% endif %}
@@ -297,6 +309,138 @@
       <option value="{{ role }}" {{ 'selected' if (connection.default_role if connection else 'user') == role }}>{{ role }}</option>
       {% endfor %}
     </select>
+
+    <label for="role_source">Evaluate rules against</label>
+    <select id="role_source" name="role_source">
+      {% set current_source = connection.role_source if connection else 'claims' %}
+      <option value="claims" {{ 'selected' if current_source == 'claims' }}>
+        claims — the token or assertion only
+      </option>
+      <option value="scim" {{ 'selected' if current_source == 'scim' }}>
+        scim — SCIM-provisioned group membership only
+      </option>
+      <option value="claims_then_scim" {{ 'selected' if current_source == 'claims_then_scim' }}>
+        claims_then_scim — claims first, fall back to SCIM groups
+      </option>
+    </select>
+    <p class="field-help">
+      Many applications authorise against groups a provisioning connector pushed
+      them rather than against anything in the token: the token says who you
+      are, the directory sync says what you can do. Choosing a SCIM source lets
+      you test that whole loop — provision into a group, sign in, gain the role,
+      remove from the group, lose it.
+    </p>
+    <p class="field-help">
+      SCIM matching uses <code>userName</code>, email, and <code>externalId</code>.
+      If your subject claim is <code>sub</code> it is a pairwise identifier that
+      will never match a UPN — point it at <code>preferred_username</code> or
+      <code>email</code> instead.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Expected outcome</h3>
+    <p class="muted small">
+      What should be true after a sign-in through this connection. Every attempt
+      is checked against these and reported as pass or fail on the dashboard and
+      in the activity log — which turns "sign in and read the claims" into a
+      regression test you can re-run after a policy change.
+    </p>
+
+    <label for="expected_role">Expected role</label>
+    <select id="expected_role" name="expected_role">
+      <option value="">(not asserted)</option>
+      {% for role in roles %}
+      <option value="{{ role }}" {{ 'selected' if connection and connection.expected_role == role }}>{{ role }}</option>
+      {% endfor %}
+    </select>
+
+    <label>Claim expectations</label>
+    <div id="expectation-list">
+      {% for item in (connection.expectations if connection else []) %}
+      <div class="rule-row btn-row">
+        <input type="text" name="expect_claim" value="{{ item.claim }}" placeholder="amr" />
+        <select name="expect_operator">
+          {% for operator in expectation_operators %}
+          <option value="{{ operator }}" {{ 'selected' if item.operator == operator }}>{{ operator }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="expect_value" value="{{ item.value }}" placeholder="mfa" />
+        <input type="text" name="expect_description" value="{{ item.description }}" placeholder="why this matters" />
+        <button type="button" class="btn-quiet" data-remove-rule>Remove</button>
+      </div>
+      {% endfor %}
+    </div>
+
+    <template id="expectation-template">
+      <div class="rule-row btn-row">
+        <input type="text" name="expect_claim" placeholder="amr" />
+        <select name="expect_operator">
+          {% for operator in expectation_operators %}
+          <option value="{{ operator }}">{{ operator }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="expect_value" placeholder="mfa" />
+        <input type="text" name="expect_description" placeholder="why this matters" />
+        <button type="button" class="btn-quiet" data-remove-rule>Remove</button>
+      </div>
+    </template>
+
+    <div class="btn-row">
+      <button type="button" class="btn-quiet" id="add-expectation">Add expectation</button>
+    </div>
+    <p class="field-help">
+      <code>amr contains mfa</code> asserts multi-factor actually happened.
+      <code>tid equals &lt;tenant&gt;</code> asserts the user came from the
+      directory you expect. <code>present</code> and <code>absent</code> take no
+      value.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Step-up challenge</h3>
+    <p class="muted small">
+      The condition <a href="/step-up">the protected action page</a> requires.
+      Leave the required value blank to disable it for this connection.
+    </p>
+
+    <div class="grid">
+      <div>
+        <label for="stepup_claim">Claim</label>
+        <input type="text" id="stepup_claim" name="stepup_claim"
+               value="{{ connection.stepup_claim if connection else 'amr' }}" />
+      </div>
+      <div>
+        <label for="stepup_operator">Operator</label>
+        <select id="stepup_operator" name="stepup_operator">
+          {% for operator in expectation_operators %}
+          <option value="{{ operator }}"
+            {{ 'selected' if (connection.stepup_operator if connection else 'contains') == operator }}>
+            {{ operator }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="stepup_value">Required value</label>
+        <input type="text" id="stepup_value" name="stepup_value"
+               value="{{ connection.stepup_value if connection else '' }}" placeholder="mfa" />
+      </div>
+    </div>
+
+    <label for="stepup_acr_values">Request acr_values on challenge</label>
+    <input type="text" id="stepup_acr_values" name="stepup_acr_values"
+           value="{{ connection.stepup_acr_values if connection else '' }}" placeholder="mfa" />
+
+    <label for="stepup_claims_challenge">Claims challenge (raw JSON)</label>
+    <textarea id="stepup_claims_challenge" name="stepup_claims_challenge"
+              placeholder='{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'>{{ connection.stepup_claims_challenge if connection else '' }}</textarea>
+    <p class="field-help">
+      An Entra ID authentication context is requested this way — <code>c1</code>,
+      <code>c2</code>, and so on, matching the context you assigned to a
+      Conditional Access policy. Most other providers use <code>acr_values</code>
+      above instead.
+    </p>
   </div>
 
   <div class="btn-row">

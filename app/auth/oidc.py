@@ -134,7 +134,12 @@ def _pkce_pair() -> tuple[str, str]:
 
 
 async def build_authorization_request(
-    connection: IdpConnection, *, extra_prompt: str = "", extra_acr: str = ""
+    connection: IdpConnection,
+    *,
+    extra_prompt: str = "",
+    extra_acr: str = "",
+    extra_claims: str = "",
+    extra_max_age: int | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Return (authorization_url, flow_state).
 
@@ -142,9 +147,11 @@ async def build_authorization_request(
     cookie; it is required again at the callback to complete PKCE and to check
     state and nonce.
 
-    extra_prompt / extra_acr let the dashboard trigger a step-up or forced
-    re-authentication on demand without editing the saved connection — that is
-    how you test "require MFA" interactively.
+    The `extra_*` arguments let the dashboard and the step-up page trigger a
+    stronger authentication request on demand without editing the saved
+    connection — that is how you test "require MFA" interactively.
+    `extra_claims` carries a claims challenge, which is the mechanism an Entra
+    ID authentication context uses to demand step-up for a specific action.
     """
     settings = load_settings(connection)
     assert isinstance(settings, OidcSettings)
@@ -181,11 +188,13 @@ async def build_authorization_request(
     if acr:
         params["acr_values"] = acr
 
-    if settings.max_age is not None:
-        params["max_age"] = str(settings.max_age)
+    max_age = settings.max_age if extra_max_age is None else extra_max_age
+    if max_age is not None:
+        params["max_age"] = str(max_age)
 
-    if settings.claims_request:
-        params["claims"] = settings.claims_request
+    claims_request = extra_claims or settings.claims_request
+    if claims_request:
+        params["claims"] = claims_request
 
     return f"{authorization_endpoint}?{urlencode(params)}", flow_state
 

@@ -33,7 +33,7 @@
           {% else %}<span class="badge denied">disabled</span>{% endif %}
         </td>
         <td class="muted">{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else 'never' }}</td>
-        <td style="text-align:right;">
+        <td class="align-right">
           <form method="post" action="/admin/users/{{ user.id }}/toggle" class="inline">
             <button type="submit" class="btn-quiet">{{ 'Disable' if user.is_active else 'Enable' }}</button>
           </form>
@@ -43,7 +43,7 @@
         <td colspan="5">
           <form method="post" action="/admin/users/{{ user.id }}/password" class="btn-row">
             <input type="password" name="password" placeholder="New password (min 12 characters)"
-                   autocomplete="new-password" style="max-width:320px;" />
+                   autocomplete="new-password" class="narrow" />
             <button type="submit" class="btn-quiet">Set password</button>
           </form>
         </td>

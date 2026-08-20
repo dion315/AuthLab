@@ -104,4 +104,16 @@ def oidc_connection(db) -> IdpConnection:
 
 
 def pytest_sessionfinish(session, exitstatus):
-    Path(_db_path).unlink(missing_ok=True)
+    # Dispose first: Windows refuses to unlink a file that still has an open
+    # handle, and SQLAlchemy's pool holds one until told otherwise. Without
+    # this the whole suite passes and then dies in teardown.
+    engine.dispose()
+    try:
+        Path(_db_path).unlink(missing_ok=True)
+        # WAL mode leaves these alongside the database.
+        for suffix in ("-wal", "-shm"):
+            Path(_db_path + suffix).unlink(missing_ok=True)
+    except OSError:
+        # A leaked handle should not fail an otherwise green run; the file is
+        # in a temp directory the OS will reclaim.
+        pass

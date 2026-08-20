@@ -13,6 +13,7 @@ any of these routes authenticated.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from urllib.parse import urlencode
@@ -23,13 +24,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import events
+from app.auth import apitoken, oidc, saml
 from app.auth import connections as conn
-from app.auth import oidc, saml
+from app.auth import expectations as expectation_engine
 from app.auth.schemas import SETTINGS_MODELS
+from app.config import get_settings
 from app.db import get_db
 from app.deps import require_role
 from app.models import (
+    API_SCOPES,
+    ROLE_SOURCES,
     ROLES,
+    ApiToken,
     IdpConnection,
     LocalUser,
     ScimClient,
@@ -80,6 +86,54 @@ def _parse_role_rules(form: Any) -> list[dict[str, str]]:
     return rules
 
 
+def _parse_expectations(form: Any) -> list[dict[str, str]]:
+    """Read the expectation rows off the connection form.
+
+    An expectation with no claim name asserts nothing, so blank rows are
+    dropped rather than stored — the form always renders one empty row for
+    adding the next one.
+    """
+    claims = form.getlist("expect_claim")
+    operators = form.getlist("expect_operator")
+    values = form.getlist("expect_value")
+    descriptions = form.getlist("expect_description")
+
+    parsed: list[dict[str, str]] = []
+    for claim, operator, value, description in zip(
+        claims, operators, values, descriptions, strict=False
+    ):
+        if not claim.strip():
+            continue
+        parsed.append(
+            {
+                "claim": claim.strip(),
+                "operator": operator,
+                "value": value.strip(),
+                "description": description.strip(),
+            }
+        )
+    return parsed
+
+
+def _apply_assertion_fields(connection: IdpConnection, form: Any) -> None:
+    """Expectation and step-up settings, shared by create and update."""
+    role_source = str(form.get("role_source", "claims"))
+    connection.role_source = role_source if role_source in ROLE_SOURCES else "claims"
+
+    expected_role = str(form.get("expected_role", "")).strip()
+    connection.expected_role = expected_role if expected_role in ROLES else ""
+    connection.expectations = _parse_expectations(form)
+
+    connection.stepup_claim = str(form.get("stepup_claim", "amr")).strip() or "amr"
+    stepup_operator = str(form.get("stepup_operator", "contains")).strip()
+    connection.stepup_operator = (
+        stepup_operator if stepup_operator in expectation_engine.OPERATORS else "contains"
+    )
+    connection.stepup_value = str(form.get("stepup_value", "")).strip()
+    connection.stepup_acr_values = str(form.get("stepup_acr_values", "")).strip()
+    connection.stepup_claims_challenge = str(form.get("stepup_claims_challenge", "")).strip()
+
+
 # --- overview ----------------------------------------------------------------
 
 
@@ -128,6 +182,8 @@ def new_connection_form(
             "config": model().model_dump(),
             "role_rules": [],
             "roles": ROLES,
+            "role_sources": ROLE_SOURCES,
+            "expectation_operators": expectation_engine.OPERATORS,
             "urls": {},
             "errors": [],
         },
@@ -173,6 +229,7 @@ async def create_connection(
     if errors:
         return _redirect("/admin/connections/new", error="; ".join(errors))
 
+    _apply_assertion_fields(connection, form)
     conn.store_settings(connection, config_data)
     db.add(connection)
     db.commit()
@@ -204,6 +261,7 @@ def edit_connection_form(
         "redirect_uri": conn.redirect_uri(connection.slug),
         "acs_url": conn.acs_url(connection.slug),
         "sls_url": conn.sls_url(connection.slug),
+        "export_url": f"/admin/connections/{connection.id}/export",
         "metadata_url": conn.metadata_url(connection.slug),
         "login_url": f"/auth/{connection.protocol}/{connection.slug}/login",
     }
@@ -218,6 +276,8 @@ def edit_connection_form(
             "config": conn.redacted_config(connection),
             "role_rules": connection.role_rules or [],
             "roles": ROLES,
+            "role_sources": ROLE_SOURCES,
+            "expectation_operators": expectation_engine.OPERATORS,
             "urls": urls,
             "errors": [],
             "message": request.query_params.get("message", ""),
@@ -246,6 +306,7 @@ async def update_connection(
     connection.email_claim = str(form.get("email_claim", connection.email_claim)).strip()
     connection.name_claim = str(form.get("name_claim", connection.name_claim)).strip()
     connection.role_rules = _parse_role_rules(form)
+    _apply_assertion_fields(connection, form)
 
     config_data = _extract_config(form, connection.protocol)
     errors = conn.validate_config(connection.protocol, config_data)
@@ -665,3 +726,396 @@ def revoke(
         detail={"session_id": session_id},
     )
     return _redirect("/admin/sessions", message="Session revoked")
+
+
+# --- connection export -------------------------------------------------------
+
+
+@router.get("/connections/{connection_id}/export")
+def export_connection(
+    connection_id: str,
+    db: Session = Depends(get_db),
+    _session: UserSession = Depends(admin_only),
+) -> Response:
+    """Download one connection as JSON, ready to import elsewhere.
+
+    Secrets are omitted, so the file is safe to attach to a ticket or commit to
+    a repository of known-good configurations. The destination prompts for the
+    client secret on import.
+    """
+    connection = db.get(IdpConnection, connection_id)
+    if connection is None:
+        return _redirect("/admin", error="Connection not found")
+
+    payload = {"connections": [conn.export_connection(connection)]}
+    return Response(
+        content=json.dumps(payload, indent=2, default=str),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="authlab-connection-{connection.slug}.json"'
+            )
+        },
+    )
+
+
+@router.post("/connections/import")
+async def import_connection_form(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Paste an exported definition into the console."""
+    form = await request.form()
+    raw = str(form.get("definition", "")).strip()
+    if not raw:
+        return _redirect("/admin/automation", error="Paste a connection definition first")
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return _redirect("/admin/automation", error=f"That is not valid JSON: {exc}")
+
+    definitions = payload.get("connections") if isinstance(payload, dict) else None
+    if definitions is None:
+        definitions = [payload]
+
+    imported: list[str] = []
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            return _redirect("/admin/automation", error="Each definition must be an object")
+        try:
+            connection, created = conn.import_connection(db, definition)
+        except ValueError as exc:
+            return _redirect("/admin/automation", error=str(exc))
+        imported.append(f"{connection.name} ({'created' if created else 'updated'})")
+        events.record(
+            db,
+            kind="config_change",
+            outcome="ok",
+            summary=f"Imported connection '{connection.name}'",
+            request=request,
+            connection_slug=connection.slug,
+            subject=session.email,
+        )
+
+    oidc.invalidate_cache()
+    return _redirect(
+        "/admin/automation",
+        message=f"Imported {len(imported)}: {', '.join(imported)}. Re-enter any client secret.",
+    )
+
+
+# --- automation tokens -------------------------------------------------------
+
+
+def _render_automation(
+    request: Request, db: Session, session: UserSession, *, new_token: str = ""
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin/automation.html",
+        {
+            "session": session,
+            "tokens": list(db.execute(select(ApiToken).order_by(ApiToken.name)).scalars()),
+            "scopes": API_SCOPES,
+            "connections": conn.list_all(db),
+            "new_token": new_token,
+            "api_base_url": get_settings().base_url.rstrip("/"),
+            "message": request.query_params.get("message", ""),
+            "error": request.query_params.get("error", ""),
+        },
+    )
+
+
+@router.get("/automation", response_class=HTMLResponse)
+def automation_console(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    return _render_automation(request, db, session)
+
+
+@router.post("/automation/tokens", response_class=HTMLResponse)
+async def create_api_token(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    form = await request.form()
+    name = str(form.get("name", "")).strip() or "Automation token"
+    scopes = [scope for scope in form.getlist("scopes") if scope in API_SCOPES]
+
+    if not scopes:
+        return _redirect("/admin/automation", error="Select at least one scope")
+
+    token = generate_token()
+    db.add(
+        ApiToken(
+            name=name,
+            token_hash=hash_token(token),
+            token_hint=token[:6],
+            scopes=scopes,
+            enabled=True,
+        )
+    )
+    db.commit()
+
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok",
+        summary=f"Created API token '{name}' with scopes {', '.join(scopes)}",
+        request=request,
+        subject=session.email,
+    )
+
+    # Rendered rather than redirected, for the same reason the SCIM token is:
+    # a credential in a query string ends up in logs, history, and referrers.
+    return _render_automation(request, db, session, new_token=token)
+
+
+@router.post("/automation/tokens/{token_id}/delete")
+def delete_api_token(
+    token_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    token = db.get(ApiToken, token_id)
+    if token is None:
+        return _redirect("/admin/automation", error="Token not found")
+    name = token.name
+    db.delete(token)
+    db.commit()
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok",
+        summary=f"Deleted API token '{name}'",
+        request=request,
+        subject=session.email,
+    )
+    return _redirect("/admin/automation", message="Token deleted")
+
+
+# --- service and API access ---------------------------------------------------
+
+
+def _oidc_connections(db: Session) -> list[IdpConnection]:
+    return [c for c in conn.list_all(db) if c.protocol == "oidc"]
+
+
+@router.get("/service-access", response_class=HTMLResponse)
+def service_access(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin/service_access.html",
+        {
+            "session": session,
+            "connections": _oidc_connections(db),
+            "result": None,
+            "token_response": None,
+            "selected": request.query_params.get("connection", ""),
+            "message": request.query_params.get("message", ""),
+            "error": request.query_params.get("error", ""),
+        },
+    )
+
+
+@router.post("/service-access/inspect", response_class=HTMLResponse)
+async def inspect_token(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Validate a pasted access token the way a resource server would.
+
+    This is the half of OAuth the rest of the app does not exercise: not "can
+    this person sign in" but "would an API accept this token, and what would it
+    decide the caller may do".
+    """
+    form = await request.form()
+    slug = str(form.get("connection", "")).strip()
+    token = str(form.get("token", "")).strip()
+    audience = str(form.get("audience", "")).strip()
+
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "oidc":
+        return _redirect("/admin/service-access", error="Choose an OIDC connection")
+
+    result: dict[str, Any] | None = None
+    error = ""
+    try:
+        result = await apitoken.inspect_access_token(
+            connection, token, expected_audience=audience
+        )
+    except oidc.OidcError as exc:
+        error = exc.message
+
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok" if result and result.get("valid") else "denied",
+        summary=(
+            f"Inspected an access token against '{connection.name}': "
+            f"{'valid' if result and result.get('valid') else 'rejected'}"
+        ),
+        request=request,
+        connection_slug=connection.slug,
+        subject=session.email,
+        # The token itself is never recorded — only the verdict and the checks.
+        detail={"checks": (result or {}).get("checks", []), "error": error},
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "admin/service_access.html",
+        {
+            "session": session,
+            "connections": _oidc_connections(db),
+            "result": result,
+            "token_response": None,
+            "selected": slug,
+            "message": "",
+            "error": error,
+        },
+    )
+
+
+@router.post("/service-access/client-credentials", response_class=HTMLResponse)
+async def run_client_credentials(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Mint a token as the application itself, with no user involved.
+
+    Service principals are how most application-to-application access actually
+    works, and none of the browser flow tells you anything about them.
+    """
+    form = await request.form()
+    slug = str(form.get("connection", "")).strip()
+    scope = str(form.get("scope", "")).strip()
+
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "oidc":
+        return _redirect("/admin/service-access", error="Choose an OIDC connection")
+
+    token_response: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    error = ""
+    try:
+        token_response = await apitoken.client_credentials_token(connection, scope=scope)
+        access_token = str(token_response.get("access_token", ""))
+        if access_token:
+            result = await apitoken.inspect_access_token(connection, access_token)
+    except oidc.OidcError as exc:
+        error = exc.description or exc.message
+
+    events.record(
+        db,
+        kind="config_change",
+        outcome="ok" if token_response else "denied",
+        summary=(
+            f"client_credentials against '{connection.name}': "
+            f"{'issued' if token_response else 'refused'}"
+        ),
+        request=request,
+        connection_slug=connection.slug,
+        subject=session.email,
+        detail={"scope": scope, "error": error},
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "admin/service_access.html",
+        {
+            "session": session,
+            "connections": _oidc_connections(db),
+            "result": result,
+            "token_response": token_response,
+            "selected": slug,
+            "message": "",
+            "error": error,
+        },
+    )
+
+
+# --- session comparison -------------------------------------------------------
+
+
+def diff_claims(left: dict[str, Any], right: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compare two claim sets, key by key.
+
+    The question this answers is "what changed between the attempt that worked
+    and the one that did not" — usually amr, acr, ipaddr, or a group that
+    appeared. Reading two JSON dumps side by side to find it is exactly the
+    manual work worth removing.
+    """
+    rows: list[dict[str, Any]] = []
+    for key in sorted(set(left) | set(right)):
+        in_left = key in left
+        in_right = key in right
+        left_value = left.get(key)
+        right_value = right.get(key)
+
+        if in_left and not in_right:
+            state = "removed"
+        elif in_right and not in_left:
+            state = "added"
+        elif left_value == right_value:
+            state = "same"
+        else:
+            state = "changed"
+
+        rows.append(
+            {"claim": key, "state": state, "left": left_value, "right": right_value}
+        )
+    return rows
+
+
+@router.get("/sessions/compare", response_class=HTMLResponse)
+def compare_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(admin_only),
+) -> Response:
+    """Side-by-side claim diff between two sessions.
+
+    Two sign-ins, one that satisfied a policy and one that did not, and the
+    difference between them is usually two or three claims. This finds them.
+    """
+    left_id = request.query_params.get("a", "")
+    right_id = request.query_params.get("b", "")
+
+    left = db.get(UserSession, left_id) if left_id else None
+    right = db.get(UserSession, right_id) if right_id else None
+
+    rows: list[dict[str, Any]] = []
+    if left is not None and right is not None:
+        rows = diff_claims(left.raw_claims or {}, right.raw_claims or {})
+
+    changed_only = request.query_params.get("changed_only", "") == "1"
+    return templates.TemplateResponse(
+        request,
+        "admin/session_diff.html",
+        {
+            "session": session,
+            "left": left,
+            "right": right,
+            "rows": [r for r in rows if r["state"] != "same"] if changed_only else rows,
+            "changed_only": changed_only,
+            "difference_count": sum(1 for r in rows if r["state"] != "same"),
+            "sessions": list(
+                db.execute(
+                    select(UserSession).order_by(UserSession.created_at.desc()).limit(50)
+                ).scalars()
+            ),
+        },
+    )

@@ -85,6 +85,105 @@ def validate_config(protocol: str, data: dict[str, Any]) -> list[str]:
     return []
 
 
+# --- portable definitions ----------------------------------------------------
+#
+# A connection is a dozen fields spread over four sections of a form, and half
+# of them are provider-specific strings nobody remembers. Exporting the working
+# one and importing it somewhere else is how a colleague gets the same setup
+# without retyping it, and how a pipeline stands up a known state before a test.
+
+# Never exported, whatever the protocol. These are the fields the admin UI also
+# refuses to render back, for the same reason.
+EXPORT_EXCLUDED: set[str] = {field for fields in SECRET_FIELDS.values() for field in fields}
+
+# Columns carried in an exported definition. `slug` is the identity, so an
+# import updates rather than duplicates when the slug already exists.
+_PORTABLE_COLUMNS = (
+    "slug",
+    "name",
+    "protocol",
+    "enabled",
+    "role_claim",
+    "role_rules",
+    "role_source",
+    "default_role",
+    "subject_claim",
+    "email_claim",
+    "name_claim",
+    "expected_role",
+    "expectations",
+    "stepup_claim",
+    "stepup_operator",
+    "stepup_value",
+    "stepup_acr_values",
+    "stepup_claims_challenge",
+)
+
+
+def export_connection(connection: IdpConnection) -> dict[str, Any]:
+    """A connection as portable JSON, with every secret removed.
+
+    Secrets are omitted rather than blanked so an import cannot silently clear
+    a client secret that is already correctly configured at the destination —
+    `store_settings` treats a missing secret as "leave what is there".
+    """
+    settings_obj = load_settings(connection)
+    config = settings_obj.model_dump()
+    for field in EXPORT_EXCLUDED:
+        config.pop(field, None)
+
+    data: dict[str, Any] = {key: getattr(connection, key) for key in _PORTABLE_COLUMNS}
+    data["config"] = config
+    # Named so anyone reading the file knows what it will and will not carry.
+    data["secrets_excluded"] = sorted(EXPORT_EXCLUDED & set(settings_obj.model_dump().keys()))
+    return data
+
+
+def import_connection(db: Session, data: dict[str, Any]) -> tuple[IdpConnection, bool]:
+    """Create or update a connection from an exported definition.
+
+    Returns (connection, created). Raises ValueError with a readable message
+    for anything that cannot be applied, because the caller is usually a
+    pipeline whose only feedback channel is the error string.
+    """
+    protocol = str(data.get("protocol", "")).strip()
+    if protocol not in SETTINGS_MODELS:
+        raise ValueError(f"Unknown protocol '{protocol}'. Expected one of {sorted(SETTINGS_MODELS)}.")
+
+    slug = str(data.get("slug", "")).strip().lower()
+    if not slug:
+        raise ValueError("A 'slug' is required — it identifies the connection to create or update.")
+
+    config = data.get("config") or {}
+    if not isinstance(config, dict):
+        raise ValueError("'config' must be an object.")
+
+    errors = validate_config(protocol, {**config, **{f: "" for f in EXPORT_EXCLUDED}})
+    if errors:
+        raise ValueError("; ".join(errors))
+
+    connection = get_by_slug(db, slug)
+    created = connection is None
+    if connection is None:
+        connection = IdpConnection(slug=slug, protocol=protocol, config={})
+        db.add(connection)
+    elif connection.protocol != protocol:
+        raise ValueError(
+            f"Connection '{slug}' already exists with protocol "
+            f"'{connection.protocol}'; refusing to change it to '{protocol}'."
+        )
+
+    for key in _PORTABLE_COLUMNS:
+        if key in ("slug", "protocol") or key not in data:
+            continue
+        setattr(connection, key, data[key])
+
+    # Secrets absent from the payload keep whatever is already stored.
+    store_settings(connection, dict(config))
+    db.commit()
+    return connection, created
+
+
 # --- queries -----------------------------------------------------------------
 
 

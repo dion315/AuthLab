@@ -14,13 +14,48 @@
     {% endif %}
   </p>
   {% if role_drifted %}
-  <div class="flash flash-warn" style="margin-top:14px;">
+  <div class="flash flash-warn mt-md">
     The role mapping has changed since you signed in. Your session still carries
     <strong>{{ session.role }}</strong>, but the current rules would assign
     <strong>{{ current_role }}</strong>. Sign out and back in to pick up the change.
   </div>
   {% endif %}
 </div>
+
+{% if checks and checks.configured %}
+<div class="card">
+  <h3>
+    Expected outcome
+    {% if checks.passed %}
+    <span class="badge ok">all passed</span>
+    {% else %}
+    <span class="badge denied">{{ checks.failed_count }} failed</span>
+    {% endif %}
+  </h3>
+  <p class="muted small">
+    What this connection asserts should be true after a sign-in. This is the
+    result you can hand to someone else — it does not require them to read a
+    claim dump and agree with your interpretation.
+  </p>
+  <div class="table-scroll">
+    <table>
+      <tr><th></th><th>Claim</th><th>Expected</th><th>Actual</th><th>Why it matters</th></tr>
+      {% for check in checks.checks %}
+      <tr class="claim-row">
+        <td>
+          {% if check.passed %}<span class="trace-match">pass</span>
+          {% else %}<span class="check-fail">fail</span>{% endif %}
+        </td>
+        <td>{{ check.claim }}</td>
+        <td class="mono">{{ check.operator }} {{ check.value }}</td>
+        <td class="mono">{{ check.actual if check.actual is not none else '—' }}</td>
+        <td class="muted small">{{ check.description }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
 
 <div class="card">
   <h3>Local weather</h3>
@@ -36,11 +71,14 @@
 <div class="card">
   <h3>Why you have this role</h3>
   <p class="muted small">
-    Looking for claim <code>{{ claim_lookup.claim }}</code>
+    Role source: <code>{{ claim_lookup.role_source }}</code>
+    {% if claim_lookup.role_source != 'scim' %}
+      · looking for claim <code>{{ claim_lookup.claim }}</code>
+    {% endif %}
     {% if claim_lookup.found %}
-      — found {{ claim_lookup.values | join(', ') }}
+      — found {{ claim_lookup.matched_values | join(', ') }}
     {% else %}
-      — <strong>not present in this token.</strong>
+      — <strong>nothing found to match against.</strong>
     {% endif %}
   </p>
 
@@ -49,9 +87,10 @@
     {% for step in role_trace %}
     <div class="trace-row">
       <span class="muted">#{{ step.rule }}</span>
+      <span class="badge">{{ step.source }}</span>
       <span class="mono">{{ step.operator }} "{{ step.value }}"</span>
       <span>→ {{ step.role }}</span>
-      <span style="margin-left:auto;">
+      <span class="push-right">
         {% if step.matched %}
           <span class="trace-match">matched on "{{ step.matched_on }}"</span>
         {% else %}
@@ -77,6 +116,39 @@
   </p>
   {% endif %}
 </div>
+
+{% if claim_lookup.role_source != 'claims' %}
+<div class="card">
+  <h3>
+    Provisioned identity
+    {% if scim_link.found %}<span class="badge ok">linked</span>
+    {% else %}<span class="badge">not found</span>{% endif %}
+  </h3>
+  {% if scim_link.found %}
+  <p class="muted small">
+    Matched SCIM user <strong>{{ scim_link.user.user_name }}</strong>
+    ({% if scim_link.active %}active{% else %}<strong>deactivated</strong>{% endif %}).
+  </p>
+  {% if scim_link.groups %}
+  <p class="muted small">Groups: {{ scim_link.groups | join(', ') }}</p>
+  {% else %}
+  <p class="muted small">This user is in no groups, so no SCIM rule can match.</p>
+  {% endif %}
+  <p class="field-help"><a href="/admin/scim/users/{{ scim_link.user.id }}">View provisioning payload →</a></p>
+  {% else %}
+  <p class="muted small">
+    No provisioned user matches this session. Looked for:
+    {{ scim_link.searched_for | join(', ') or 'nothing — the session carries no identifiers' }}.
+  </p>
+  <p class="field-help">
+    SCIM identifies users by <code>userName</code>, which is normally a UPN or
+    email address. If your <code>subject_claim</code> is <code>sub</code>, it is
+    a pairwise identifier that will never match — point it at
+    <code>preferred_username</code> or <code>email</code> instead.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
 {% endif %}
 
 {% if notable_claims %}
@@ -102,6 +174,49 @@
 </div>
 {% endif %}
 
+{% if lifetimes %}
+<div class="card">
+  <h3>Token and session lifetimes</h3>
+  {% if session_outlives_token %}
+  <div class="flash flash-warn">
+    This app's session outlives the token that created it. Between those two
+    moments the provider considers the token expired while access here
+    continues — which is why revocation has to be server-side rather than left
+    to token expiry.
+  </div>
+  {% endif %}
+  <div class="table-scroll">
+    <table>
+      <tr><th>When</th><th>Source</th><th>UTC</th><th>Relative</th><th></th></tr>
+      {% for row in lifetimes %}
+      <tr class="claim-row">
+        <td>{{ row.name }}</td>
+        <td><span class="badge">{{ row.source }}</span></td>
+        <td class="mono">{{ row.utc }}</td>
+        <td class="mono {{ 'check-fail' if row.expired }}">{{ row.relative }}</td>
+        <td class="muted small">{{ row.description }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if stepup.configured %}
+<div class="card">
+  <h3>
+    Step-up authentication
+    {% if stepup.satisfied %}<span class="badge ok">satisfied</span>
+    {% else %}<span class="badge">challenge required</span>{% endif %}
+  </h3>
+  <p class="muted small">
+    This connection gates <a href="/step-up">a protected action</a> on
+    <code>{{ stepup.claim }} {{ stepup.operator }} {{ stepup.required }}</code>.
+  </p>
+  <div class="btn-row"><a class="btn btn-quiet" href="/step-up">Try the protected action</a></div>
+</div>
+{% endif %}
+
 {% if connection and connection.protocol == 'oidc' %}
 <div class="card">
   <h3>Re-test authentication</h3>
@@ -113,6 +228,7 @@
   <div class="btn-row">
     <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login">Force re-authentication</a>
     <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login&amp;acr_values=mfa">Request MFA context</a>
+    <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=login&amp;max_age=0">Reject any cached session (max_age=0)</a>
     <a class="btn btn-quiet" href="/auth/oidc/{{ connection.slug }}/login?prompt=select_account">Pick a different account</a>
   </div>
 </div>
@@ -131,12 +247,18 @@
   <p class="field-help">
     The complete claim set or SAML attribute statement, unmodified. This is
     what role mapping reads from.
+    {% if session.role == 'admin' %}
+    <a href="/admin/sessions/compare?a={{ session.id }}">Compare this against another sign-in →</a>
+    {% endif %}
   </p>
 </div>
 
 <div class="card">
-  <h3>Sign out</h3>
+  <h3>Account</h3>
   <div class="btn-row">
+    {% if session.protocol == 'local' %}
+    <a class="btn btn-quiet" href="/account/password">Change my password</a>
+    {% endif %}
     <form method="post" action="/logout" class="inline">
       <button type="submit" class="btn-quiet">Sign out of this app</button>
     </form>

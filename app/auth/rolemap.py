@@ -11,6 +11,13 @@ expresses group membership differently:
 
 So the claim name, the match operator, and the resulting role are all
 configuration rather than code.
+
+There is a second place group membership can come from: SCIM. A great many
+real applications authorise against the groups a provisioning connector pushed
+them rather than against anything in the token — the token says who you are,
+the directory sync says what you can do. `role_source` selects between the two,
+and SCIM group names are passed *in* by the caller so this module keeps having
+no idea a database exists.
 """
 
 from __future__ import annotations
@@ -50,7 +57,8 @@ def extract_claim(claims: dict[str, Any], path: str) -> list[str]:
     return [str(value)]
 
 
-def _matches(operator: str, rule_value: str, claim_value: str) -> bool:
+def matches(operator: str, rule_value: str, claim_value: str) -> bool:
+    """Apply one operator. Public because expectations reuse the vocabulary."""
     if operator == "equals":
         return claim_value == rule_value
     if operator == "contains":
@@ -67,50 +75,84 @@ def _matches(operator: str, rule_value: str, claim_value: str) -> bool:
     return False
 
 
+def candidate_sources(
+    connection: IdpConnection,
+    claims: dict[str, Any],
+    scim_groups: list[str] | None = None,
+) -> list[tuple[str, list[str]]]:
+    """The value lists the rules run against, in the order they are tried.
+
+    Source-major rather than rule-major: "claims_then_scim" means *exhaust the
+    rules against the token first*, and only fall back to provisioned group
+    membership if nothing there matched. That ordering is the one people
+    expect, because the token is the fresher signal.
+    """
+    role_source = connection.role_source or "claims"
+    sources: list[tuple[str, list[str]]] = []
+
+    if role_source in ("claims", "claims_then_scim"):
+        sources.append(("claims", extract_claim(claims, connection.role_claim)))
+    if role_source in ("scim", "claims_then_scim"):
+        sources.append(("scim", list(scim_groups or [])))
+
+    return sources
+
+
 def resolve_role(
-    connection: IdpConnection, claims: dict[str, Any]
+    connection: IdpConnection,
+    claims: dict[str, Any],
+    scim_groups: list[str] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Map claims to a role.
+    """Map claims and/or SCIM group membership to a role.
 
     Returns the role plus a trace of every rule evaluated. The trace is shown
     in the dashboard so that "why am I only a 'user'?" is answerable by looking
     at the screen instead of by adding logging and redeploying.
     """
-    claim_values = extract_claim(claims, connection.role_claim)
     trace: list[dict[str, Any]] = []
 
-    for index, rule in enumerate(connection.role_rules or []):
-        operator = rule.get("operator", "equals")
-        rule_value = rule.get("value", "")
-        role = rule.get("role", DEFAULT_ROLE)
+    for source_name, values in candidate_sources(connection, claims, scim_groups):
+        for index, rule in enumerate(connection.role_rules or []):
+            operator = rule.get("operator", "equals")
+            rule_value = rule.get("value", "")
+            role = rule.get("role", DEFAULT_ROLE)
 
-        matched_on = next(
-            (cv for cv in claim_values if _matches(operator, rule_value, cv)), None
-        )
-        trace.append(
-            {
-                "rule": index + 1,
-                "operator": operator,
-                "value": rule_value,
-                "role": role,
-                "matched": matched_on is not None,
-                "matched_on": matched_on,
-            }
-        )
-        if matched_on is not None:
-            return role, trace
+            matched_on = next(
+                (value for value in values if matches(operator, rule_value, value)), None
+            )
+            trace.append(
+                {
+                    "rule": index + 1,
+                    "source": source_name,
+                    "operator": operator,
+                    "value": rule_value,
+                    "role": role,
+                    "matched": matched_on is not None,
+                    "matched_on": matched_on,
+                }
+            )
+            if matched_on is not None:
+                return role, trace
 
     return connection.default_role or DEFAULT_ROLE, trace
 
 
 def describe_claim_lookup(
-    connection: IdpConnection, claims: dict[str, Any]
+    connection: IdpConnection,
+    claims: dict[str, Any],
+    scim_groups: list[str] | None = None,
 ) -> dict[str, Any]:
     """Diagnostics for the dashboard: what we looked for and what we found."""
-    values = extract_claim(claims, connection.role_claim)
+    sources = candidate_sources(connection, claims, scim_groups)
+    values = [value for _, source_values in sources for value in source_values]
+    # Deliberately not called "values": Jinja resolves \{\{ mapping.values \}\} to
+    # the dict *method*, so a key by that name renders as a bound method and
+    # any filter applied to it fails at request time.
     return {
         "claim": connection.role_claim,
+        "role_source": connection.role_source or "claims",
         "found": bool(values),
-        "values": values,
+        "matched_values": values,
+        "by_source": {name: source_values for name, source_values in sources},
         "available_claims": sorted(claims.keys()),
     }

@@ -166,3 +166,24 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2)
 
 .claim-row td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
 .weather-line { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+
+/* --- expectation and diff states --- */
+.check-fail { color: var(--danger); font-weight: 600; }
+.diff-added { color: var(--ok); font-weight: 600; }
+.diff-removed { color: var(--danger); font-weight: 600; }
+.diff-changed { color: var(--warn); font-weight: 600; }
+.diff-same td { opacity: 0.65; }
+textarea { min-height: 90px; font-family: var(--mono); font-size: 12px; }
+
+/* --- layout utilities ---
+   These exist as classes rather than inline style attributes because
+   `style-src 'self'` blocks inline styles just as it blocks inline scripts.
+   An inline style attribute here would be silently dropped by the browser and
+   the layout would quietly be wrong. */
+.align-right { text-align: right; }
+.push-right { margin-left: auto; }
+.mt-0 { margin-top: 0; }
+.mt-sm { margin-top: 10px; }
+.mt-md { margin-top: 14px; }
+.mt-lg { margin-top: 20px; }
+.narrow { max-width: 320px; }

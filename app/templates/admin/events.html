@@ -10,7 +10,7 @@
 </p>
 
 <div class="card">
-  <div class="btn-row" style="margin-top:0;">
+  <div class="btn-row mt-0">
     <a class="btn {{ 'btn-quiet' if kind }}" href="/admin/events">All</a>
     {% for filter_kind in ['login_success', 'login_failure', 'login_start', 'logout', 'scim_request', 'config_change'] %}
     <a class="btn {{ '' if kind == filter_kind else 'btn-quiet' }}"

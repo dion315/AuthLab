@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% set active_nav = 'admin' %}
+{% block title %}Compare sessions{% endblock %}
+
+{% block content %}
+<h1>Compare sessions</h1>
+<p class="muted small"><a href="/admin/sessions">← Active sessions</a></p>
+
+<div class="card">
+  <h3>What changed between two sign-ins</h3>
+  <p class="muted small">
+    One attempt satisfied the policy and one did not, and the difference is
+    usually two or three claims — <code>amr</code>, <code>acr</code>,
+    <code>ipaddr</code>, or a group that appeared. Reading two JSON dumps side
+    by side to find them is the manual work this removes.
+  </p>
+
+  <form method="get" action="/admin/sessions/compare">
+    <div class="grid">
+      <div>
+        <label for="a">Session A</label>
+        <select id="a" name="a">
+          <option value="">—</option>
+          {% for row in sessions %}
+          <option value="{{ row.id }}" {{ 'selected' if left and row.id == left.id }}>
+            {{ row.created_at.strftime('%Y-%m-%d %H:%M') }} · {{ row.email or row.subject }} · {{ row.source }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="b">Session B</label>
+        <select id="b" name="b">
+          <option value="">—</option>
+          {% for row in sessions %}
+          <option value="{{ row.id }}" {{ 'selected' if right and row.id == right.id }}>
+            {{ row.created_at.strftime('%Y-%m-%d %H:%M') }} · {{ row.email or row.subject }} · {{ row.source }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="checkbox">
+      <input type="checkbox" id="changed_only" name="changed_only" value="1"
+             {{ 'checked' if changed_only }} />
+      <label for="changed_only">Show differences only</label>
+    </div>
+
+    <div class="btn-row"><button type="submit">Compare</button></div>
+  </form>
+</div>
+
+{% if left and right %}
+<div class="card">
+  <h3>
+    {{ difference_count }} difference{{ '' if difference_count == 1 else 's' }}
+  </h3>
+  <p class="muted small">
+    <strong>A</strong> {{ left.email or left.subject }} via {{ left.source }}
+    ({{ left.protocol|upper }}) at {{ left.created_at.strftime('%Y-%m-%d %H:%M') }},
+    role {{ left.role }}, from {{ left.client_ip or 'unknown' }}
+    <br />
+    <strong>B</strong> {{ right.email or right.subject }} via {{ right.source }}
+    ({{ right.protocol|upper }}) at {{ right.created_at.strftime('%Y-%m-%d %H:%M') }},
+    role {{ right.role }}, from {{ right.client_ip or 'unknown' }}
+  </p>
+
+  <div class="table-scroll">
+    <table>
+      <tr><th>Claim</th><th></th><th>A</th><th>B</th></tr>
+      {% for row in rows %}
+      <tr class="claim-row diff-{{ row.state }}">
+        <td>{{ row.claim }}</td>
+        <td>
+          {% if row.state == 'same' %}<span class="trace-skip">same</span>
+          {% elif row.state == 'added' %}<span class="diff-added">only in B</span>
+          {% elif row.state == 'removed' %}<span class="diff-removed">only in A</span>
+          {% else %}<span class="diff-changed">changed</span>{% endif %}
+        </td>
+        <td class="mono">{{ row.left if row.left is not none else '—' }}</td>
+        <td class="mono">{{ row.right if row.right is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% elif left or right %}
+<div class="card">
+  <p class="muted small">Choose a second session to compare against.</p>
+</div>
+{% endif %}
+{% endblock %}

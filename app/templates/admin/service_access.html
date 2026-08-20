@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% set active_nav = 'admin' %}
+{% block title %}Service &amp; API access{% endblock %}
+
+{% block content %}
+<h1>Service &amp; API access</h1>
+<p class="muted small"><a href="/admin">← Admin console</a></p>
+
+{% if message %}<div class="flash flash-ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <h3>The other half of OAuth</h3>
+  <p class="muted small">
+    Every other page here tests the <em>client</em> side: a browser turns up and
+    gets redirected. But most application-to-application access in an enterprise
+    never involves a browser — a service principal gets a token and presents it
+    to an API, which decides. This page is the API.
+  </p>
+  <p class="field-help">
+    Note for Entra ID: an access token issued for <strong>Microsoft Graph</strong>
+    cannot be validated by anyone but Graph — the signature covers a nonce only
+    Microsoft holds, so verification will fail no matter what you do. Tokens
+    issued for an API you expose on your own app registration validate normally.
+  </p>
+</div>
+
+{% if not connections %}
+<div class="card">
+  <div class="flash flash-warn">
+    No OIDC connections are configured. Add one first — this page validates
+    tokens against a connection's published signing keys.
+  </div>
+</div>
+{% else %}
+
+<div class="card">
+  <h3>Inspect an access token</h3>
+  <p class="muted small">
+    Paste a token from anywhere — a curl call, a Postman run, a log — and see
+    exactly which check passes and which fails.
+  </p>
+  <form method="post" action="/admin/service-access/inspect">
+    <label for="inspect-connection">Validate against</label>
+    <select id="inspect-connection" name="connection">
+      {% for connection in connections %}
+      <option value="{{ connection.slug }}" {{ 'selected' if connection.slug == selected }}>
+        {{ connection.name }}
+      </option>
+      {% endfor %}
+    </select>
+
+    <label for="audience">Expected audience (optional)</label>
+    <input type="text" id="audience" name="audience"
+           placeholder="api://my-api  — defaults to the connection's client_id" />
+
+    <label for="token">Access token</label>
+    <textarea id="token" name="token" rows="5" placeholder="eyJ0eXAiOiJKV1Qi..." required></textarea>
+
+    <div class="btn-row"><button type="submit">Validate</button></div>
+  </form>
+  <p class="field-help">
+    The token is never stored. Only the verdict and the individual check
+    results are written to the activity log.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Get a token as the application itself</h3>
+  <p class="muted small">
+    Runs a <code>client_credentials</code> grant using the connection's client
+    ID and secret. No user is involved — this is the service principal path.
+  </p>
+  <form method="post" action="/admin/service-access/client-credentials">
+    <label for="cc-connection">Connection</label>
+    <select id="cc-connection" name="connection">
+      {% for connection in connections %}
+      <option value="{{ connection.slug }}" {{ 'selected' if connection.slug == selected }}>
+        {{ connection.name }}
+      </option>
+      {% endfor %}
+    </select>
+
+    <label for="scope">Scope</label>
+    <input type="text" id="scope" name="scope"
+           placeholder="api://my-api/.default" />
+
+    <div class="btn-row"><button type="submit">Request token</button></div>
+  </form>
+  <p class="field-help">
+    A public client (PKCE, no secret) cannot use this grant — which is itself
+    worth demonstrating.
+  </p>
+</div>
+{% endif %}
+
+{% if token_response %}
+<div class="card">
+  <h3>Token response</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Field</th><th>Value</th></tr>
+      {% for key, value in token_response.items() %}
+      <tr class="claim-row">
+        <td>{{ key }}</td>
+        <td class="mono">
+          {% if key in ('access_token', 'id_token', 'refresh_token') %}
+            {{ value[:24] }}… <span class="muted">({{ value|length }} chars)</span>
+          {% else %}{{ value }}{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if result %}
+<div class="card">
+  <h3>
+    Validation result
+    {% if result.valid %}<span class="badge ok">accepted</span>
+    {% else %}<span class="badge denied">rejected</span>{% endif %}
+  </h3>
+
+  {% if result.error %}
+  <div class="flash flash-error">{{ result.error }}</div>
+  {% endif %}
+
+  {% if result.checks %}
+  <div class="table-scroll">
+    <table>
+      <tr><th></th><th>Check</th><th>Detail</th></tr>
+      {% for check in result.checks %}
+      <tr class="claim-row">
+        <td>
+          {% if check.passed %}<span class="trace-match">pass</span>
+          {% else %}<span class="check-fail">fail</span>{% endif %}
+        </td>
+        <td>{{ check.name }}</td>
+        <td class="muted mono">{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+{% if result.authorisation %}
+<div class="card">
+  <h3>What this token authorises</h3>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Claim</th><th>Value</th></tr>
+      {% for name, value in result.authorisation.items() %}
+      <tr class="claim-row">
+        <td>{{ name }}</td>
+        <td class="mono">{{ value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p class="field-help">
+    <code>scp</code> is delegated scope (a user consented); <code>roles</code> is
+    application permission (no user involved). <code>idtyp</code> tells you which
+    kind of caller this is.
+  </p>
+</div>
+{% endif %}
+
+{% if result.header %}
+<div class="card">
+  <h3>Header</h3>
+  <pre>{{ result.header | pretty_json }}</pre>
+</div>
+{% endif %}
+
+{% if result.claims %}
+<div class="card">
+  <h3>Claims</h3>
+  <pre>{{ result.claims | pretty_json }}</pre>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

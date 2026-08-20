@@ -26,7 +26,7 @@ from app.db import get_db
 from app.models import ScimClient, ScimGroup, ScimUser
 from app.scim import schemas as s
 from app.scim.filters import AttributeMap, ScimFilterError, build_filter
-from app.security import revoke_sessions_for_subject, verify_token
+from app.security import revoke_sessions_for_user, verify_token
 
 MAX_PAGE_SIZE = 200
 
@@ -497,10 +497,11 @@ def delete_user(
     if user is None:
         raise ScimHttpError(status.HTTP_404_NOT_FOUND, f"User {user_id} not found.")
     subject = user.user_name
+    identifiers = (user.user_name, user.email, user.external_id)
     db.delete(user)
     db.commit()
-    revoke_sessions_for_subject(db, subject)
-    _log(db, request, f"Deleted user {subject}")
+    revoked = revoke_sessions_for_user(db, *identifiers)
+    _log(db, request, f"Deleted user {subject}; revoked {revoked} session(s)")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -606,7 +607,12 @@ def _handle_deactivation(
     expire. It is only possible because sessions are server-side.
     """
     if was_active and not user.active:
-        revoked = revoke_sessions_for_subject(db, user.user_name)
+        # Every identifier the session could have been recorded under: the
+        # subject claim may be a pairwise `sub`, an email, or the externalId
+        # the provider also sends over SCIM.
+        revoked = revoke_sessions_for_user(
+            db, user.user_name, user.email, user.external_id
+        )
         events.record(
             db,
             kind="scim_request",

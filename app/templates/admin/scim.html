@@ -10,7 +10,7 @@
 <div class="flash flash-ok">
   <strong>New provisioning token — copy it now.</strong>
   Only a hash is stored, so this is the only time it can be shown.
-  <div class="copyable" style="margin-top:10px;">
+  <div class="copyable mt-sm">
     <input type="text" id="new-token" value="{{ new_token }}" readonly />
     <button type="button" class="btn-quiet" data-copy-target="new-token">Copy</button>
   </div>
@@ -44,7 +44,7 @@
         <td class="mono">{{ client.token_hint }}…</td>
         <td>{% if client.enabled %}<span class="badge ok">enabled</span>{% else %}<span class="badge">disabled</span>{% endif %}</td>
         <td class="muted">{{ client.last_used_at.strftime('%Y-%m-%d %H:%M') if client.last_used_at else 'never' }}</td>
-        <td style="text-align:right;">
+        <td class="align-right">
           {% if not read_only %}
           <form method="post" action="/admin/scim/clients/{{ client.id }}/delete" class="inline">
             <button type="submit" class="btn-quiet">Revoke</button>
@@ -88,7 +88,7 @@
           {% else %}<span class="badge denied">inactive</span>{% endif %}
         </td>
         <td class="muted">{{ user.groups | map(attribute='display_name') | join(', ') or '—' }}</td>
-        <td style="text-align:right;"><a href="/admin/scim/users/{{ user.id }}">Inspect</a></td>
+        <td class="align-right"><a href="/admin/scim/users/{{ user.id }}">Inspect</a></td>
       </tr>
       {% endfor %}
     </table>

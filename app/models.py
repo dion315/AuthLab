@@ -44,6 +44,17 @@ def _now() -> datetime:
 ROLES = ("admin", "power", "user")
 DEFAULT_ROLE = "user"
 
+# Where a connection reads group/role information from.
+#   claims           — the token or assertion only (the original behaviour)
+#   scim             — SCIM-provisioned group membership only
+#   claims_then_scim — claims first; fall back to SCIM groups if nothing matched
+ROLE_SOURCES = ("claims", "scim", "claims_then_scim")
+
+# Capabilities an automation token can be granted. Kept coarse on purpose:
+# this is a test harness, and a token that can read everything and write
+# connections is the realistic unit of delegation for a CI job.
+API_SCOPES = ("events:read", "connections:read", "connections:write", "sessions:read")
+
 
 # --- local accounts ----------------------------------------------------------
 
@@ -107,11 +118,38 @@ class IdpConnection(Base):
     )
     default_role: Mapped[str] = mapped_column(String(20), nullable=False, default=DEFAULT_ROLE)
 
+    # Which source the rules above are evaluated against — see ROLE_SOURCES.
+    # "scim" and "claims_then_scim" let a provisioned group membership decide
+    # the role, which is how a great many real applications actually behave and
+    # was previously impossible to test here: SCIM data had no effect on access.
+    role_source: Mapped[str] = mapped_column(String(20), nullable=False, default="claims")
+
     # Where to read identity from. Defaults suit most IdPs; overridable because
     # "most" is not "all" — this is the field people actually need to change.
     subject_claim: Mapped[str] = mapped_column(String(200), nullable=False, default="sub")
     email_claim: Mapped[str] = mapped_column(String(200), nullable=False, default="email")
     name_claim: Mapped[str] = mapped_column(String(200), nullable=False, default="name")
+
+    # --- expected outcome, asserted after every sign-in ---
+    # Turns "sign in and squint at the claims" into a pass/fail. Empty means no
+    # expectation and nothing is asserted.
+    expected_role: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    #   [{"claim": "amr", "operator": "contains", "value": "mfa", "description": "..."}]
+    expectations: Mapped[list] = mapped_column(
+        MutableList.as_mutable(JSON), nullable=False, default=list
+    )
+
+    # --- step-up / claims challenge ---
+    # The condition /step-up requires. Empty stepup_value disables the page for
+    # this connection.
+    stepup_claim: Mapped[str] = mapped_column(String(200), nullable=False, default="amr")
+    stepup_operator: Mapped[str] = mapped_column(String(20), nullable=False, default="contains")
+    stepup_value: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    # What to ask the IdP for when the condition is not met. acr_values suits
+    # most providers; claims_challenge carries an Entra authentication-context
+    # id (the `claims` request parameter) for CA-protected actions.
+    stepup_acr_values: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    stepup_claims_challenge: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -136,6 +174,31 @@ class ScimClient(Base):
     # a presented token, never to display it. Shown once at creation time.
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
     token_hint: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ApiToken(Base):
+    """A bearer token for the automation API.
+
+    Separate from ScimClient because the two answer to different callers and
+    carry different authority: a SCIM token is handed to an identity provider's
+    provisioning connector, an API token is handed to a pipeline that exports
+    evidence or pushes a connection definition. Conflating them would mean
+    every provisioning connector could rewrite your IdP configuration.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hint: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    # Subset of API_SCOPES.
+    scopes: Mapped[list] = mapped_column(
+        MutableList.as_mutable(JSON), nullable=False, default=list
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

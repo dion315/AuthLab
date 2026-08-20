@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
+from onelogin.saml2.logout_request import OneLogin_Saml2_Logout_Request
 from onelogin.saml2.settings import OneLogin_Saml2_Settings
 
 from app.auth.connections import acs_url, load_settings, sls_url
@@ -236,14 +237,78 @@ def build_logout_url(
     *,
     name_id: str = "",
     session_index: str = "",
-) -> str:
+) -> tuple[str, str]:
+    """Return (redirect_url, request_id) for an SP-initiated LogoutRequest.
+
+    The request id matters for the same reason the AuthnRequest id does: the
+    IdP's LogoutResponse carries it in InResponseTo, and validating that is
+    what stops an unsolicited response ending someone's session. The caller
+    stores it in a signed cookie and hands it back at the SLS endpoint.
+    """
     settings = load_settings(connection)
     assert isinstance(settings, SamlSettings)
     if not settings.idp_slo_url:
-        return ""
+        return "", ""
     auth = _auth(connection, request_data)
-    return auth.logout(
+    url = auth.logout(
         name_id=name_id or None,
         session_index=session_index or None,
         return_to=get_settings().base_url.rstrip("/") + "/",
     )
+    return url, auth.get_last_request_id() or ""
+
+
+def process_logout(
+    connection: IdpConnection, request_data: dict[str, Any], *, request_id: str | None
+) -> tuple[str, str]:
+    """Handle whatever arrived at the SLS endpoint.
+
+    Two different messages land here and python3-saml tells them apart by which
+    parameter is present:
+
+      * **SAMLResponse** — the IdP's answer to a LogoutRequest we sent. The
+        session is already gone locally; this just confirms the IdP ended its
+        own. `request_id` is validated against InResponseTo.
+      * **SAMLRequest** — the IdP asking *us* to end a session, because the
+        user signed out somewhere else. We must terminate the session and
+        return a signed LogoutResponse, which is what `process_slo` builds.
+
+    Returns (redirect_url, name_id). The redirect URL is the IdP endpoint to
+    send the LogoutResponse to for the second case, and "" for the first.
+    `name_id` is populated only for IdP-initiated logout, and identifies whose
+    sessions to revoke — the browser making that request may not be carrying
+    our cookie at all.
+    """
+    settings = load_settings(connection)
+    assert isinstance(settings, SamlSettings)
+
+    auth = _auth(connection, request_data)
+    is_idp_initiated = bool(request_data.get("get_data", {}).get("SAMLRequest"))
+
+    try:
+        # keep_local_session=True because session termination is ours to do
+        # against the database, not python3-saml's to do against a dict.
+        redirect_url = auth.process_slo(keep_local_session=True, request_id=request_id)
+    except Exception as exc:
+        raise SamlError(
+            f"Could not process the SAML logout message: {exc}", detail={"reason": str(exc)}
+        ) from exc
+
+    errors = auth.get_errors()
+    if errors:
+        raise SamlError(
+            "SAML logout message rejected: " + ", ".join(errors),
+            detail={"errors": errors, "reason": auth.get_last_error_reason() or ""},
+        )
+
+    name_id = ""
+    if is_idp_initiated:
+        try:
+            name_id = OneLogin_Saml2_Logout_Request.get_nameid(auth.get_last_request_xml())
+        except Exception:  # noqa: BLE001
+            # A LogoutRequest without a readable NameID is still a valid
+            # instruction to end *this* browser's session; it just cannot tell
+            # us about anyone else's.
+            name_id = ""
+
+    return redirect_url or "", name_id
