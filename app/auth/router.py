@@ -13,12 +13,13 @@ result, and burying it in a stack trace throws away the answer.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import events
@@ -28,7 +29,14 @@ from app.auth.rolemap import resolve_role
 from app.config import get_settings
 from app.db import get_db
 from app.deps import current_session
-from app.models import LocalUser, UserSession
+from app.models import (
+    PASSWORD_SOURCE_ENV,
+    PASSWORD_SOURCE_GENERATED,
+    PASSWORD_SOURCE_USER,
+    PASSWORD_SOURCES,
+    LocalUser,
+    UserSession,
+)
 from app.ratelimit import check as ratelimit_check
 from app.ratelimit import record_failure, reset
 from app.redirects import safe_path
@@ -850,35 +858,136 @@ async def logout(
 # --- helper used by the admin UI --------------------------------------------
 
 
-def bootstrap_local_admin(db: Session) -> tuple[str, str] | None:
-    """Create the first local account if none exists.
+@dataclass(frozen=True)
+class AdminPasswordState:
+    """What startup did with the local administrator password.
 
-    Returns (email, generated_password) when a password was generated, so the
-    caller can print it once at startup. Returns None if an account already
-    existed or the password came from configuration.
+    `password` is populated only when the app knows the plaintext — which is
+    exactly when it just set it. A stored password is an Argon2 hash and cannot
+    be recovered, so an account whose password somebody chose can never be
+    reported here, only described.
+    """
+
+    email: str
+    source: str
+    password: str = ""
+    created: bool = False
+    changed: bool = False
+
+
+def _effective_source(user: LocalUser) -> str:
+    """The password source, inferring it for rows written before the column.
+
+    A database upgraded from an earlier version has no value here. Rather than
+    guess, infer from the flag that used to carry the same meaning:
+    `must_change_password` was set only for an app-generated password.
+    """
+    if user.password_source in PASSWORD_SOURCES:
+        return user.password_source
+    return PASSWORD_SOURCE_GENERATED if user.must_change_password else PASSWORD_SOURCE_USER
+
+
+def sync_local_admin(db: Session) -> AdminPasswordState:
+    """Reconcile the local administrator account with the environment.
+
+    Runs on every start, not just the first, because the environment is meant
+    to be declarative: if `BOOTSTRAP_ADMIN_PASSWORD` says what the password is,
+    then that is what it is, and editing `.env` and restarting is a supported
+    way to get back in.
+
+    Three outcomes, one per password source:
+
+      * **A password is configured.** It is applied — created on first run, and
+        reapplied later if the stored hash no longer matches, which is how an
+        edited `.env` takes effect. The value is never logged: it is already in
+        a file the operator controls, and putting it in the log would only
+        widen where it exists.
+
+      * **No password is configured.** The app issues one and the caller prints
+        it. It is reissued on *every* start, so missing the banner in a wall of
+        container output costs a restart rather than the account.
+
+      * **Somebody chose the password.** Startup leaves it alone. Overwriting a
+        deliberately chosen password because a service restarted would be a
+        genuinely bad surprise, and there is no way to display it anyway.
     """
     import secrets as _secrets
 
-    existing = db.execute(select(LocalUser).limit(1)).scalar_one_or_none()
-    if existing is not None:
-        return None
-
     settings = get_settings()
-    generated = ""
-    password = settings.bootstrap_admin_password
-    if not password:
-        generated = _secrets.token_urlsafe(18)
-        password = generated
+    email = settings.bootstrap_admin_email.strip().lower()
+    configured = settings.bootstrap_admin_password
 
-    user = LocalUser(
-        email=settings.bootstrap_admin_email.strip().lower(),
-        display_name="Local administrator",
-        password_hash=hash_password(password),
-        role="admin",
-        is_active=True,
-        must_change_password=bool(generated),
-    )
-    db.add(user)
+    user = db.execute(
+        select(LocalUser).where(func.lower(LocalUser.email) == email)
+    ).scalar_one_or_none()
+
+    # An existing deployment may have its administrator under a different
+    # address; only fall back to "any admin" when the configured one is absent,
+    # so the two never end up fighting over the same account.
+    if user is None:
+        user = db.execute(
+            select(LocalUser).where(LocalUser.role == "admin").limit(1)
+        ).scalar_one_or_none()
+
+    if user is None:
+        password = configured or _secrets.token_urlsafe(18)
+        source = PASSWORD_SOURCE_ENV if configured else PASSWORD_SOURCE_GENERATED
+        user = LocalUser(
+            email=email,
+            display_name="Local administrator",
+            password_hash=hash_password(password),
+            role="admin",
+            is_active=True,
+            # Never forced: a configured password is the operator's decision,
+            # and a generated one is reprinted every start, so demanding a
+            # change would be undone by the next restart.
+            must_change_password=False,
+            password_source=source,
+        )
+        db.add(user)
+        db.commit()
+        return AdminPasswordState(
+            email=user.email,
+            source=source,
+            password="" if configured else password,
+            created=True,
+        )
+
+    source = _effective_source(user)
+
+    if configured:
+        if verify_password(configured, user.password_hash):
+            # Already matches; nothing to write.
+            if user.password_source != PASSWORD_SOURCE_ENV:
+                user.password_source = PASSWORD_SOURCE_ENV
+                db.commit()
+            return AdminPasswordState(email=user.email, source=PASSWORD_SOURCE_ENV)
+
+        user.password_hash = hash_password(configured)
+        user.password_source = PASSWORD_SOURCE_ENV
+        user.must_change_password = False
+        # A configured password is no use if the account it belongs to is
+        # disabled, and the whole point of this account is being able to get in.
+        user.is_active = True
+        db.commit()
+        return AdminPasswordState(
+            email=user.email, source=PASSWORD_SOURCE_ENV, changed=True
+        )
+
+    if source == PASSWORD_SOURCE_USER:
+        return AdminPasswordState(email=user.email, source=PASSWORD_SOURCE_USER)
+
+    # No password configured and the current one is app-managed: issue a fresh
+    # one so the banner below is always the password that actually works.
+    password = _secrets.token_urlsafe(18)
+    user.password_hash = hash_password(password)
+    user.password_source = PASSWORD_SOURCE_GENERATED
+    user.must_change_password = False
+    user.is_active = True
     db.commit()
-
-    return (user.email, generated) if generated else None
+    return AdminPasswordState(
+        email=user.email,
+        source=PASSWORD_SOURCE_GENERATED,
+        password=password,
+        changed=True,
+    )

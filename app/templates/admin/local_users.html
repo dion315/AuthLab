@@ -25,7 +25,12 @@
       <tr>
         <td>
           <strong>{{ user.email }}</strong>
-          {% if user.must_change_password %}<br /><span class="badge">generated password — change it</span>{% endif %}
+          {% if user.must_change_password %}<br /><span class="badge warn">must change password at next sign-in</span>{% endif %}
+          {% if user.password_source == 'env' %}
+          <br /><span class="badge">password from BOOTSTRAP_ADMIN_PASSWORD</span>
+          {% elif user.password_source == 'generated' %}
+          <br /><span class="badge">password reissued and logged on every start</span>
+          {% endif %}
         </td>
         <td><span class="badge role-{{ user.role }}">{{ user.role }}</span></td>
         <td>
@@ -44,8 +49,17 @@
           <form method="post" action="/admin/users/{{ user.id }}/password" class="btn-row">
             <input type="password" name="password" placeholder="New password (min 12 characters)"
                    autocomplete="new-password" class="narrow" />
+            <span class="checkbox">
+              <input type="checkbox" id="must-change-{{ loop.index }}" name="must_change" />
+              <label for="must-change-{{ loop.index }}">Require a change at next sign-in</label>
+            </span>
             <button type="submit" class="btn-quiet">Set password</button>
           </form>
+          <p class="field-help">
+            Setting a password here makes it that person's to keep: startup
+            stops reissuing it, even with <code>BOOTSTRAP_ADMIN_PASSWORD</code>
+            unset.
+          </p>
         </td>
       </tr>
       {% endfor %}

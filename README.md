@@ -55,27 +55,46 @@ and prints a generated administrator password to the log on first run.
 docker compose up --build
 ```
 
-Watch the log for the first-run credentials:
+Watch the log for the administrator password:
 
 ```
 ====================================================================
-  First-run local administrator created
+  Local administrator created
     email:    admin@authlab.local
     password: xY3k...
-  Sign in at http://localhost:8000/login and change it.
+  Sign in at http://localhost:8000/login
 ====================================================================
 ```
-
-That password is generated once and printed to a log, so the app makes you
-replace it: until you do, every page redirects to **Change your password**.
-Set `BOOTSTRAP_ADMIN_PASSWORD` if you would rather choose it yourself (in which
-case nothing is forced — you have already made that decision), and
-`APP_SECRET_KEY` so sessions survive a restart:
 
 ```bash
 cp .env.example .env
 python -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into APP_SECRET_KEY
 ```
+
+### The administrator password
+
+This is the account that still works when a Conditional Access policy blocks
+federated sign-in, so it is deliberately easy to recover. There are three
+states, reconciled on every start:
+
+| `BOOTSTRAP_ADMIN_PASSWORD` | What happens |
+|---|---|
+| Set | That is the password. Reapplied every start, so editing `.env` and restarting is a supported way back in. Never written to the log — it is already in a file you control. |
+| Blank | The app generates one, and **reissues and prints it on every start**. Missing the banner in a wall of container output costs a restart, not the account. |
+| Blank, but you changed the password in the console | Left alone. Startup will not overwrite a password somebody chose, and cannot display it — it is an Argon2 hash. |
+
+A generated password is therefore in your container log, and in anything
+collecting it. That is a fair trade for a harness you take apart and rebuild,
+and it is the reason to set `BOOTSTRAP_ADMIN_PASSWORD` for anything that lives
+longer than an afternoon.
+
+To take an account back after someone has changed its password, put a value in
+`BOOTSTRAP_ADMIN_PASSWORD` and restart. That also re-enables the account if it
+had been disabled, since a recovery password is no use if the account it opens
+is switched off.
+
+Admin → Local accounts shows which state each account is in, and can require a
+password change at next sign-in when you reset one for somebody else.
 
 To run against Postgres instead of the default SQLite:
 
@@ -153,7 +172,7 @@ app/
   static/             CSS and JS as real files, so the CSP needs no 'unsafe-inline'
 
 terraform/            Azure, AWS, and GCP modules
-tests/                253 tests
+tests/                270 tests
 ```
 
 A few decisions your developers may find worth copying:
@@ -546,12 +565,13 @@ pytest tests -q
 ruff check app tests
 ```
 
-253 tests, covering the SCIM request shapes real connectors send (including the
+270 tests, covering the SCIM request shapes real connectors send (including the
 two Entra quirks above), the filter parser, role mapping from both claims and
 SCIM groups, expectation evaluation, session revocation across mismatched
 identifiers, access token validation, the automation API and its scopes, schema
 reconciliation, the open-redirect guard, authorisation guards, output escaping,
-secret encryption, and that every page renders.
+secret encryption, administrator password reconciliation across restarts,
+and that every page renders.
 
 ---
 
@@ -579,7 +599,11 @@ What is deliberate, in case you are adapting this:
   hashes and compared in constant time.
 - **Changing your own password requires the current one**, even though the
   session already proves identity — that is what stops an unattended browser
-  becoming a permanent account takeover.
+  becoming a permanent account takeover. Doing so also takes ownership of the
+  password, so startup stops reissuing it.
+- **A configured `BOOTSTRAP_ADMIN_PASSWORD` is never logged.** Only a password
+  the app generated is printed, because only then is the log the sole place it
+  exists.
 - **Sign-in failures are indistinguishable** whether the account exists or not,
   and local sign-in is throttled per IP and account.
 - **Secrets never travel in URLs.** SCIM and API tokens are rendered directly

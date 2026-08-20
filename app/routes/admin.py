@@ -33,6 +33,7 @@ from app.db import get_db
 from app.deps import require_role
 from app.models import (
     API_SCOPES,
+    PASSWORD_SOURCE_USER,
     ROLE_SOURCES,
     ROLES,
     ApiToken,
@@ -624,7 +625,10 @@ async def change_local_password(
         return _redirect("/admin/users", error="Password must be at least 12 characters")
 
     user.password_hash = hash_password(password)
-    user.must_change_password = False
+    # An administrator setting a password is a person choosing one, so startup
+    # must not reissue it on the next restart.
+    user.password_source = PASSWORD_SOURCE_USER
+    user.must_change_password = _form_bool(form, "must_change")
     db.commit()
     events.record(
         db,

@@ -31,7 +31,7 @@ from app.auth import connections as conn
 from app.auth.rolemap import extract_claim, matches
 from app.db import get_db
 from app.deps import current_session, require_login
-from app.models import LocalUser, UserSession
+from app.models import PASSWORD_SOURCE_USER, LocalUser, UserSession
 from app.security import hash_password, verify_password
 from app.templating import templates
 
@@ -129,6 +129,8 @@ def change_password(
 
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
+    # Now owned by a person, so startup stops reissuing it.
+    user.password_source = PASSWORD_SOURCE_USER
     db.commit()
 
     events.record(

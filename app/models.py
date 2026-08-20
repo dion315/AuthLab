@@ -50,6 +50,18 @@ DEFAULT_ROLE = "user"
 #   claims_then_scim — claims first; fall back to SCIM groups if nothing matched
 ROLE_SOURCES = ("claims", "scim", "claims_then_scim")
 
+# Where a local account's current password came from.
+#   env       — BOOTSTRAP_ADMIN_PASSWORD. Reapplied on every start, so the
+#               environment stays the source of truth.
+#   generated — the app invented it because no password was configured. It is
+#               reissued and printed on every start, so it is never lost.
+#   user      — somebody chose it. Startup never touches these.
+# noqa on each: these are the *names* of the sources, not passwords.
+PASSWORD_SOURCE_ENV = "env"  # noqa: S105
+PASSWORD_SOURCE_GENERATED = "generated"  # noqa: S105
+PASSWORD_SOURCE_USER = "user"  # noqa: S105
+PASSWORD_SOURCES = (PASSWORD_SOURCE_ENV, PASSWORD_SOURCE_GENERATED, PASSWORD_SOURCE_USER)
+
 # Capabilities an automation token can be granted. Kept coarse on purpose:
 # this is a test harness, and a token that can read everything and write
 # connections is the realistic unit of delegation for a CI job.
@@ -77,6 +89,13 @@ class LocalUser(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="admin")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Who owns this password — see PASSWORD_SOURCES. It decides what startup is
+    # allowed to do: a password the app issued may be reissued, a password a
+    # person chose may not be silently overwritten by a restart.
+    # "" means unknown, which is what an upgraded database has; it is inferred
+    # from must_change_password rather than guessed at.
+    password_source: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

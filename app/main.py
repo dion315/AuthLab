@@ -24,11 +24,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app.auth.router import bootstrap_local_admin
+from app.auth.router import AdminPasswordState, sync_local_admin
 from app.auth.router import router as auth_router
 from app.config import get_settings
 from app.db import engine, session_scope
-from app.models import Base
+from app.models import PASSWORD_SOURCE_ENV, Base
 from app.routes.account import router as account_router
 from app.routes.admin import router as admin_router
 from app.routes.api import router as api_router
@@ -60,24 +60,60 @@ async def lifespan(_app: FastAPI):
         )
 
     with session_scope() as db:
-        created = bootstrap_local_admin(db)
+        admin = sync_local_admin(db)
 
-    if created:
-        email, password = created
-        # Printed once, never stored in plaintext, and only when we generated
-        # it ourselves.
-        logger.warning(
-            "\n%s\n  First-run local administrator created\n    email:    %s\n"
-            "    password: %s\n  Sign in at %s/login and change it.\n%s",
-            "=" * 68,
-            email,
-            password,
-            settings.base_url.rstrip("/"),
-            "=" * 68,
-        )
+    _log_admin_password(admin, settings.base_url.rstrip("/"))
 
     logger.info("AuthLab ready at %s", settings.base_url)
     yield
+
+
+def _log_admin_password(admin: AdminPasswordState, base_url: str) -> None:
+    """Say what happened to the local administrator password, every start.
+
+    The banner is printed whenever the app knows the plaintext, which is
+    whenever it just issued one. That is deliberate: an unconfigured password
+    that scrolls past once in a wall of container output is a password you have
+    lost. Reissuing and reprinting it means the worst case is a restart.
+
+    The trade is that the password is then in the container log, and in
+    anything collecting it. That is acceptable for a harness whose whole job is
+    being taken apart and rebuilt, and it is why setting
+    BOOTSTRAP_ADMIN_PASSWORD — which is never logged — is the better answer for
+    anything that lives longer than an afternoon.
+    """
+    if admin.password:
+        logger.warning(
+            "\n%s\n  Local administrator %s\n    email:    %s\n    password: %s\n"
+            "  Sign in at %s/login\n\n"
+            "  This password was generated because BOOTSTRAP_ADMIN_PASSWORD is\n"
+            "  not set, and it is regenerated and shown on every start. It is\n"
+            "  therefore in this log. Set BOOTSTRAP_ADMIN_PASSWORD to choose a\n"
+            "  stable one that is never printed, or change it in the console to\n"
+            "  take it out of the app's hands entirely.\n%s",
+            "=" * 68,
+            "created" if admin.created else "password reissued",
+            admin.email,
+            admin.password,
+            base_url,
+            "=" * 68,
+        )
+        return
+
+    if admin.source == PASSWORD_SOURCE_ENV:
+        logger.info(
+            "Local administrator %s: password %s from BOOTSTRAP_ADMIN_PASSWORD.",
+            admin.email,
+            "set" if admin.created else ("reapplied" if admin.changed else "matches"),
+        )
+        return
+
+    logger.info(
+        "Local administrator %s: password was changed in the console, so it is "
+        "left alone and cannot be displayed. Set BOOTSTRAP_ADMIN_PASSWORD and "
+        "restart to reset it.",
+        admin.email,
+    )
 
 
 app = FastAPI(
