@@ -171,8 +171,9 @@ app/
   templates/          Jinja2, autoescaping on
   static/             CSS and JS as real files, so the CSP needs no 'unsafe-inline'
 
+docs/                 Per-provider setup, and URLs/reachability
 terraform/            Azure, AWS, and GCP modules
-tests/                270 tests
+tests/                287 tests
 ```
 
 A few decisions your developers may find worth copying:
@@ -221,6 +222,10 @@ from `{issuer}/.well-known/openid-configuration`.
 | Ping | `https://auth.pingone.com/<env-id>/as` |
 
 Pasting the full discovery URL works too — the suffix is stripped.
+
+[docs/providers.md](docs/providers.md) has step-by-step setup for Entra ID,
+Okta, Auth0, AWS Cognito, Duo, and anything else — for OIDC, SAML, and SCIM —
+including which of them can actually send SCIM and which cannot.
 
 The connection page shows the exact redirect URI to register at the provider.
 It is derived from `BASE_URL`, so if that is wrong you will get a redirect-URI
@@ -318,8 +323,24 @@ applied.
 
 ## SCIM provisioning
 
+**SCIM is independent of OIDC and SAML.** It is a separate protocol with its own
+bearer-token authentication, and the provisioning endpoints hold no reference to
+a connection at all. Run it alongside an OIDC connection, a SAML connection,
+several of each at once, or with nothing configured for sign-in — provisioning
+works standalone, which is often the order you want to work in anyway.
+
+What varies is whether a given product can *send* SCIM: Entra ID and Okta can,
+Auth0, Cognito, and Duo cannot. [docs/providers.md](docs/providers.md) has the
+matrix and the setup for each.
+
 **Admin → SCIM** generates a bearer token (shown once) and displays the tenant
 URL to paste into your provider's provisioning configuration.
+
+> Provisioning is the one feature that cannot be tested against a purely local
+> deployment. Sign-in is carried by your browser, so `localhost` is fine; SCIM
+> is a direct call from the provider's servers to yours, so it needs a publicly
+> reachable URL — a tunnel, or a real deployment. See
+> [docs/deployment-urls.md](docs/deployment-urls.md).
 
 Implemented: `/Users` and `/Groups` with full CRUD and PATCH,
 `/ServiceProviderConfig`, `/ResourceTypes`, `/Schemas`, filtering, and pagination.
@@ -520,6 +541,12 @@ cp terraform.tfvars.example terraform.tfvars
 terraform init && terraform apply
 ```
 
+[docs/deployment-urls.md](docs/deployment-urls.md) covers what `BASE_URL`
+produces, what each platform's assigned hostname looks like, which features need
+the app to be reachable *from the provider* rather than from your browser, and a
+symptom-to-cause table for when a flow fails for reasons the error does not
+explain.
+
 ### The two-pass deploy
 
 The app derives its redirect URIs, SAML ACS URLs, and SCIM tenant URL from
@@ -565,13 +592,14 @@ pytest tests -q
 ruff check app tests
 ```
 
-270 tests, covering the SCIM request shapes real connectors send (including the
+287 tests, covering the SCIM request shapes real connectors send (including the
 two Entra quirks above), the filter parser, role mapping from both claims and
 SCIM groups, expectation evaluation, session revocation across mismatched
 identifiers, access token validation, the automation API and its scopes, schema
 reconciliation, the open-redirect guard, authorisation guards, output escaping,
 secret encryption, administrator password reconciliation across restarts,
-and that every page renders.
+SCIM's independence from both SSO protocols, Entra NameID stability, and
+that every page renders.
 
 ---
 
