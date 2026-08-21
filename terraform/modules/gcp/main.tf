@@ -12,13 +12,39 @@ terraform {
   }
 }
 
-locals {
-  name = var.name_prefix
+data "google_project" "this" {
+  project_id = var.project_id
+}
 
-  # Cloud Run URLs are generated with a project-specific hash, so the same
-  # two-pass pattern as the other clouds applies. See terraform/README.md.
-  base_url = var.base_url_override != "" ? var.base_url_override : (
-    var.custom_domain != "" ? "https://${var.custom_domain}" : "http://localhost:8000"
+locals {
+  name         = var.name_prefix
+  service_name = "${var.name_prefix}-app"
+
+  # Cloud Run now issues deterministic URLs of the form
+  #   https://<service>-<project number>-<region>.run.app
+  # every component of which is known before the service exists. So the URL can
+  # be computed up front rather than read back from the created service, and a
+  # first deployment is a single apply.
+  #
+  # It is also stable: it survives redeploying, pushing a new image, and
+  # deleting and recreating the service, because nothing in it is random. That
+  # is what makes it safe to register at an identity provider and circulate to
+  # other people.
+  #
+  # Services created before deterministic URLs rolled out keep a legacy
+  # hash-based hostname instead. The url_matches_service output below compares
+  # this against what the service actually reports, so a mismatch is visible
+  # rather than mysterious — set base_url_override to the app_url output if you
+  # land on a project still issuing the old form.
+  generated_url = "https://${local.service_name}-${data.google_project.this.number}.${var.region}.run.app"
+
+  # Precedence: an explicit override wins, then a custom domain, then the URL
+  # Cloud Run generates. See the custom_domain variable for what you must do in
+  # DNS — this setting only tells the app what to call itself.
+  base_url = (
+    var.base_url_override != "" ? var.base_url_override :
+    var.custom_domain != "" ? "https://${var.custom_domain}" :
+    local.generated_url
   )
 }
 
@@ -148,7 +174,8 @@ resource "google_secret_manager_secret_iam_member" "bootstrap_password" {
 # --- compute -----------------------------------------------------------------
 
 resource "google_cloud_run_v2_service" "app" {
-  name                = "${local.name}-app"
+  # Must match local.service_name, which local.generated_url is built from.
+  name                = local.service_name
   location            = var.region
   deletion_protection = false
   ingress             = "INGRESS_TRAFFIC_ALL"

@@ -1,30 +1,71 @@
 output "app_url" {
-  description = "Public URL of the deployed app."
-  value       = "https://${azurerm_container_app.app.ingress[0].fqdn}"
-}
-
-output "base_url_configured" {
-  description = "What the app currently believes its own URL is."
+  description = "The URL to use, and the one the app believes is its own."
   value       = local.base_url
 }
 
-output "needs_second_apply" {
+output "login_url" {
+  description = "Hand this to anyone who is testing sign-in."
+  value       = "${local.base_url}/login"
+}
+
+output "generated_url" {
   description = <<-EOT
-    True when the app's configured BASE_URL does not match its real URL.
-    While true, OIDC redirect URIs and SAML ACS URLs will be wrong. Fix by
-    setting base_url_override to the app_url output and applying again.
+    The hostname Azure assigned, regardless of any custom domain. Also the
+    CNAME target to point a custom domain at.
   EOT
-  value       = local.base_url != "https://${azurerm_container_app.app.ingress[0].fqdn}"
+  value       = "https://${azurerm_container_app.app.ingress[0].fqdn}"
 }
 
-output "redirect_uri_pattern" {
-  description = "Register this at your IdP, replacing {slug} with the connection slug."
-  value       = "https://${azurerm_container_app.app.ingress[0].fqdn}/auth/oidc/{slug}/callback"
+output "url_is_predictable" {
+  description = <<-EOT
+    True when the URL computed before deployment matches the one Azure actually
+    assigned — which is what makes a single apply sufficient. If this is ever
+    false, Azure has changed how it composes FQDNs: set base_url_override to
+    the generated_url output and apply again.
+  EOT
+  value       = local.generated_fqdn == azurerm_container_app.app.ingress[0].fqdn
 }
 
-output "scim_base_url" {
-  description = "Tenant URL for SCIM provisioning."
-  value       = "https://${azurerm_container_app.app.ingress[0].fqdn}/scim/v2"
+output "next_step" {
+  description = "What to do now."
+  value = (
+    local.generated_fqdn != azurerm_container_app.app.ingress[0].fqdn
+    ? "The predicted URL did not match. Set base_url_override = \"https://${azurerm_container_app.app.ingress[0].fqdn}\" and apply again."
+    : var.custom_domain != ""
+    ? "Point ${var.custom_domain} at ${azurerm_container_app.app.ingress[0].fqdn} — see the custom_domain_dns output — then sign in at ${local.base_url}/login."
+    : "Ready. Sign in at ${local.base_url}/login, then register the values in the idp_configuration output at your identity provider."
+  )
+}
+
+output "custom_domain_dns" {
+  description = <<-EOT
+    The DNS records to create when using custom_domain. Terraform does not
+    create these: the zone is usually managed elsewhere, and a record pointed
+    at the wrong place is worse than no record.
+
+    After they resolve, add the domain to the Container App and let Azure issue
+    a managed certificate.
+  EOT
+  value = var.custom_domain == "" ? null : {
+    cname_name   = var.custom_domain
+    cname_target = azurerm_container_app.app.ingress[0].fqdn
+    txt_name     = "asuid.${split(".", var.custom_domain)[0]}"
+    txt_value    = azurerm_container_app.app.custom_domain_verification_id
+  }
+}
+
+output "idp_configuration" {
+  description = <<-EOT
+    Every value an identity provider needs. Replace {slug} with the connection
+    slug you choose in the admin console.
+  EOT
+  value = {
+    oidc_redirect_uri = "${local.base_url}/auth/oidc/{slug}/callback"
+    saml_acs_url      = "${local.base_url}/auth/saml/{slug}/acs"
+    saml_sls_url      = "${local.base_url}/auth/saml/{slug}/sls"
+    saml_metadata_url = "${local.base_url}/auth/saml/{slug}/metadata"
+    scim_tenant_url   = "${local.base_url}/scim/v2"
+  }
 }
 
 output "database_host" {

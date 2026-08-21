@@ -13,14 +13,29 @@ terraform {
 }
 
 locals {
-  name = var.name_prefix
+  name     = var.name_prefix
+  app_name = "${var.name_prefix}-app"
 
-  # Container Apps generates its FQDN from the app name, environment, region,
-  # and a random suffix, so it cannot be predicted before creation. The app is
-  # deployed with a placeholder BASE_URL and corrected on a second apply — see
-  # base_url_override and the note in terraform/README.md.
-  base_url = var.base_url_override != "" ? var.base_url_override : (
-    var.custom_domain != "" ? "https://${var.custom_domain}" : "http://localhost:8000"
+  # Container Apps composes an app's FQDN as <app name>.<environment default
+  # domain>, and the *environment* is created before the app is. So the app's
+  # own URL is knowable within a single apply after all — read it off the
+  # environment rather than off the app, and there is no chicken-and-egg and no
+  # second pass.
+  #
+  # The random component lives in the environment's domain, so this URL is also
+  # stable for as long as the environment exists: redeploying the app, pushing a
+  # new image, or recreating the container app itself will not change it. Only
+  # destroying the environment does. That is what makes it safe to register at
+  # an identity provider and hand to other people.
+  generated_fqdn = "${local.app_name}.${azurerm_container_app_environment.env.default_domain}"
+
+  # Precedence: an explicit override wins, then a custom domain, then the URL
+  # Azure generates. See the custom_domain variable for what you must do in DNS
+  # — this setting only tells the app what to call itself.
+  base_url = (
+    var.base_url_override != "" ? var.base_url_override :
+    var.custom_domain != "" ? "https://${var.custom_domain}" :
+    "https://${local.generated_fqdn}"
   )
 }
 
@@ -145,7 +160,8 @@ resource "azurerm_container_app_environment" "env" {
 }
 
 resource "azurerm_container_app" "app" {
-  name                         = "${local.name}-app"
+  # Must match local.app_name, which is what local.generated_fqdn is built from.
+  name                         = local.app_name
   resource_group_name          = var.resource_group_name
   container_app_environment_id = azurerm_container_app_environment.env.id
   revision_mode                = "Single"

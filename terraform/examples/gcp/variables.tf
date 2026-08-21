@@ -39,3 +39,17 @@ variable "base_url_override" {
   type        = string
   default     = ""
 }
+
+variable "custom_domain" {
+  description = <<-EOT
+    A domain you own and will point at the app, e.g. "authlab.contoso.com".
+    Optional but recommended for anything more than a one-off test: it survives
+    the service being recreated, it is something you can circulate to colleagues
+    without explanation, and it stays valid at your identity provider.
+
+    Terraform does not create the DNS records — see the custom_domain_dns
+    output for exactly what to create.
+  EOT
+  type        = string
+  default     = ""
+}

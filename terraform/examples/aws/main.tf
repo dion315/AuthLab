@@ -24,15 +24,13 @@ module "authlab" {
   bootstrap_admin_password = var.bootstrap_admin_password
 
   base_url_override = var.base_url_override
+  custom_domain     = var.custom_domain
 }
 
 output "app_url" { value = module.authlab.app_url }
-output "scim_base_url" { value = module.authlab.scim_base_url }
-output "redirect_uri_pattern" { value = module.authlab.redirect_uri_pattern }
-
-output "next_step" {
-  value = module.authlab.needs_second_apply ? format(
-    "Set base_url_override = \"%s\" in terraform.tfvars and apply again.",
-    module.authlab.app_url,
-  ) : "BASE_URL is correct. Sign in at ${module.authlab.app_url}/login"
-}
+output "login_url" { value = module.authlab.login_url }
+output "generated_url" { value = module.authlab.generated_url }
+output "url_is_predictable" { value = module.authlab.url_is_predictable }
+output "custom_domain_dns" { value = module.authlab.custom_domain_dns }
+output "idp_configuration" { value = module.authlab.idp_configuration }
+output "next_step" { value = module.authlab.next_step }

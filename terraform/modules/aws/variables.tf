@@ -44,16 +44,35 @@ variable "bootstrap_admin_password" {
 
 variable "base_url_override" {
   description = <<-EOT
-    Public URL of the app. App Runner assigns its domain at creation, so leave
-    this empty on the first apply, then set it to the app_url output and apply
-    again. Setting custom_domain instead avoids the second pass.
+    Public URL of the app.
+
+    App Runner mints a random subdomain at creation and there is nothing to
+    compute it from, so this is the one cloud of the three that genuinely needs
+    two passes: apply, read the generated_url output, set it here, apply again.
+    Until you do, redirect URIs and the SCIM tenant URL will be wrong.
+
+    Setting custom_domain instead avoids the second pass and gives you a URL
+    that survives the service being recreated.
   EOT
   type        = string
   default     = ""
 }
 
 variable "custom_domain" {
-  description = "Custom domain, if you have one."
+  description = <<-EOT
+    A domain you own and will point at the app, e.g. "authlab.contoso.com".
+
+    Recommended for anything beyond a one-off test. It survives the service
+    being recreated, it is something you can circulate to colleagues without
+    explanation, and it means the redirect URIs you registered at an identity
+    provider stay valid.
+
+    This setting only tells the app what to call itself. Terraform does not
+    create the DNS records or the certificate binding, because the zone is
+    usually managed elsewhere and a record pointed at the wrong place is worse
+    than no record. The custom_domain_dns output lists exactly what to create;
+    until it resolves, the app will be advertising a URL that does not reach it.
+  EOT
   type        = string
   default     = ""
 }

@@ -547,16 +547,36 @@ the app to be reachable *from the provider* rather than from your browser, and a
 symptom-to-cause table for when a flow fails for reasons the error does not
 explain.
 
-### The two-pass deploy
+### Getting a predictable URL
 
 The app derives its redirect URIs, SAML ACS URLs, and SCIM tenant URL from
-`BASE_URL`, which must equal its own public URL. On all three platforms that URL
-only exists after the service is created.
+`BASE_URL`, which must equal its own public URL — and that URL wants to be
+stable, so it can be registered at a provider once and circulated to whoever is
+testing.
 
-So: apply, read the `app_url` output, set `base_url_override` to it, apply again.
-Each module has a `next_step` output that tells you exactly what to do. Setting
-`custom_domain` avoids the second pass entirely and is the better answer for
-anything long-lived.
+| Cloud | URL known before deploy? | Passes |
+|---|---|---|
+| Azure Container Apps | Yes — composed from the environment's domain, created first | **One** |
+| GCP Cloud Run | Yes — deterministic, no random component | **One** |
+| AWS App Runner | No — random subdomain minted at creation | Two, or a custom domain |
+
+Azure and GCP come up correct on the first `apply`. App Runner needs a second
+one: read `generated_url`, set `base_url_override`, apply again. Every module
+has a `next_step` output that says exactly what to do, and `url_is_predictable`
+confirming the computed URL matched what the platform assigned.
+
+Rather than copying URLs out of the admin console, read them from Terraform:
+
+```bash
+terraform output login_url          # the link to hand to testers
+terraform output idp_configuration  # every URL to register at the provider
+```
+
+Set `custom_domain` for anything beyond an afternoon. It survives the service
+being recreated, keeps registered redirect URIs valid, and is a link colleagues
+will actually click — a random cloud hostname asking for corporate credentials
+reads as phishing. Terraform does not create the DNS records; `custom_domain_dns`
+lists them.
 
 `terraform/README.md` has the details, including what to fix before using any of
 this for something real — chiefly that Terraform state holds secrets in

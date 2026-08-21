@@ -56,16 +56,32 @@ variable "bootstrap_admin_password" {
 
 variable "base_url_override" {
   description = <<-EOT
-    Public URL of the app. Container Apps only reveals its FQDN after creation,
-    so leave this empty on the first apply, then set it to the app_url output
-    and apply again. Setting custom_domain instead avoids the second pass.
+    Public URL of the app. Normally leave this empty.
+
+    Container Apps composes an app's FQDN from the app name and the *environment*
+    domain, and the environment is created first — so the module computes the URL
+    up front and a first deployment is a single apply. Set this only if the
+    url_is_predictable output comes back false, or to pin a URL deliberately.
   EOT
   type        = string
   default     = ""
 }
 
 variable "custom_domain" {
-  description = "Custom domain, if you have one. Removes the need for a second apply."
+  description = <<-EOT
+    A domain you own and will point at the app, e.g. "authlab.contoso.com".
+
+    Recommended for anything beyond a one-off test. It survives the service
+    being recreated, it is something you can circulate to colleagues without
+    explanation, and it means the redirect URIs you registered at an identity
+    provider stay valid.
+
+    This setting only tells the app what to call itself. Terraform does not
+    create the DNS records or the certificate binding, because the zone is
+    usually managed elsewhere and a record pointed at the wrong place is worse
+    than no record. The custom_domain_dns output lists exactly what to create;
+    until it resolves, the app will be advertising a URL that does not reach it.
+  EOT
   type        = string
   default     = ""
 }

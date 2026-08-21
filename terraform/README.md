@@ -13,22 +13,75 @@ Each module exposes the same variables (`image`, `app_secret_key`,
 `bootstrap_admin_email`, …) and the same outputs (`app_url`, `database_host`),
 so switching clouds is a matter of changing which module you call.
 
-## The two-pass deploy
+## Getting a predictable URL
 
 The app needs `BASE_URL` to equal its own public URL, because OIDC redirect
-URIs, SAML ACS URLs, and the SCIM tenant URL are all derived from it. On every
-one of these platforms that URL is only known after the service exists.
+URIs, SAML ACS URLs, and the SCIM tenant URL are all derived from it. You also
+want that URL to be *stable*, so it can be registered at an identity provider
+once and circulated to whoever is testing sign-in.
 
-Each module handles this the same way:
+| Cloud | Known before deploy? | Passes needed |
+|---|---|---|
+| Azure Container Apps | Yes — composed from the environment's domain, which exists first | **One** |
+| GCP Cloud Run | Yes — `<service>-<project number>-<region>.run.app` | **One** |
+| AWS App Runner | No — a random subdomain minted at creation | Two, or a custom domain |
 
-1. `terraform apply` creates everything. `BASE_URL` is set from the platform's
-   generated hostname where that hostname is predictable, and left at a
-   placeholder where it is not.
-2. Read the `app_url` output.
-3. If `base_url_override` was needed, set it and apply again.
+Azure and GCP compute the URL up front, so a first `apply` produces a working
+deployment with correct redirect URIs and SCIM tenant URL. The
+`url_is_predictable` output confirms the computed URL matched what the platform
+assigned; if it is ever false, `next_step` tells you exactly what to set.
 
-The module output tells you which case you are in. Set `custom_domain` and the
-whole problem disappears, which is the better answer for anything long-lived.
+App Runner is the exception and unavoidably so — there is nothing to compute a
+random subdomain from. Apply, read `generated_url`, set `base_url_override`,
+apply again. Or set `custom_domain` and skip it.
+
+### Stability
+
+Predictable is not the same as permanent. What changes each URL:
+
+- **Azure** — the random component lives in the Container Apps *environment*
+  domain, so pushing a new image, redeploying, or even recreating the container
+  app keeps the URL. Destroying the environment changes it.
+- **GCP** — nothing in the URL is random, so it survives deleting and recreating
+  the service entirely.
+- **AWS** — the subdomain is regenerated whenever the service is recreated.
+
+A `custom_domain` you own is immune to all of that, which is why it is the right
+answer for anything more than an afternoon's testing — and it is what you want
+anyway if colleagues across the org are going to be signing in to test
+Conditional Access policies.
+
+### What to give your identity provider
+
+Rather than copying URLs out of the admin console, read them from Terraform:
+
+```bash
+terraform output idp_configuration
+```
+
+```
+{
+  "oidc_redirect_uri" = "https://.../auth/oidc/{slug}/callback"
+  "saml_acs_url"      = "https://.../auth/saml/{slug}/acs"
+  "saml_sls_url"      = "https://.../auth/saml/{slug}/sls"
+  "saml_metadata_url" = "https://.../auth/saml/{slug}/metadata"
+  "scim_tenant_url"   = "https://.../scim/v2"
+}
+```
+
+Replace `{slug}` with the connection slug you choose in the admin console.
+`terraform output login_url` is the link to send to whoever is testing.
+
+### Custom domains
+
+Setting `custom_domain` tells the app what to call itself. It does **not**
+create DNS records or a certificate binding — the zone is usually managed
+elsewhere, and a record pointed at the wrong place is worse than no record. Read
+`terraform output custom_domain_dns` for exactly what to create, then complete
+the binding on the platform so it can issue a certificate.
+
+Until DNS resolves, the app will be advertising a URL that does not reach it, so
+do this before registering anything at a provider.
 
 ## Usage
 
