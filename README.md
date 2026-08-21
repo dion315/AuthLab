@@ -43,9 +43,16 @@ and prints a generated administrator password to the log on first run.
 - [Service and API access](#service-and-api-access)
 - [The automation API](#the-automation-api)
 - [Deploying](#deploying)
+- [API reference](#api-reference)
 - [Running the tests](#running-the-tests)
 - [Security notes](#security-notes)
 - [Known limitations](#known-limitations)
+
+Two longer guides live in [docs/](docs/):
+[connecting providers](docs/providers.md) (Entra ID, Okta, Auth0, Cognito, Duo —
+for OIDC, SAML, and SCIM) and
+[URLs and reachability](docs/deployment-urls.md) (`BASE_URL`, what works on
+localhost and what cannot, and running a test across an organisation).
 
 ---
 
@@ -143,6 +150,7 @@ app/
   deps.py             FastAPI dependencies: require_login, require_role
   ratelimit.py        Throttle for local password sign-in
   events.py           The authentication/provisioning audit trail
+  templating.py       Jinja2 setup; autoescaping asserted on at import
 
   auth/
     schemas.py        Pydantic models validating per-protocol settings
@@ -603,6 +611,12 @@ gated on an ADO environment approval, and fails the build if the new revision
 does not pass its health check.
 
 ---
+
+## API reference
+
+A running instance serves the generated OpenAPI reference at **`/docs`**. It is
+the browsable spec for the SCIM and automation endpoints — request shapes,
+parameters, and response schemas — without anyone having to write one.
 
 ## Running the tests
 

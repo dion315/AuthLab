@@ -12,6 +12,10 @@ went wrong:
   * Nothing that can fail at request time is allowed to take the process down.
     Every handler that talks to an IdP catches its own errors, and there is a
     catch-all below for anything that slips through.
+  * Startup reconciles rather than assumes. It adds any columns the models have
+    grown since the database was created, and brings the local administrator
+    password back in line with the environment — so redeploying over an
+    existing database, or editing .env to get back in, both just work.
 """
 
 from __future__ import annotations
@@ -120,9 +124,9 @@ app = FastAPI(
     title="AuthLab",
     description=(
         "IdP-agnostic harness for OIDC/OAuth 2.0, SAML 2.0, SCIM 2.0 provisioning, "
-        "and Conditional Access evaluation."
+        "access token validation, and Conditional Access evaluation."
     ),
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
     # The interactive docs are genuinely useful here — they give the SCIM
     # endpoints a browsable reference without writing one.

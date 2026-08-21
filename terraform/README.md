@@ -92,6 +92,10 @@ cp terraform.tfvars.example terraform.tfvars
 
 terraform init
 terraform apply
+
+terraform output next_step           # says whether anything is left to do
+terraform output login_url           # the link to sign in with
+terraform output idp_configuration   # every URL to register at your provider
 ```
 
 Generate `app_secret_key` with:
@@ -99,6 +103,9 @@ Generate `app_secret_key` with:
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+
+On Azure and GCP that is the whole deployment. On AWS, `next_step` will tell you
+to set `base_url_override` and apply once more — see below for why.
 
 ## Before you use this for anything real
 
