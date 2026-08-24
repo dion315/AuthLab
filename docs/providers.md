@@ -26,7 +26,7 @@ actually advertises.
 - [What each provider can actually do](#what-each-provider-can-actually-do)
 - [Before you start: where the app must be reachable from](#before-you-start-where-the-app-must-be-reachable-from)
 - [Microsoft Entra ID](#microsoft-entra-id)
-- [Okta](#okta)
+- [Okta](#okta)  — including which app type to create
 - [Auth0](#auth0)
 - [AWS Cognito](#aws-cognito)
 - [Duo](#duo)
@@ -224,6 +224,23 @@ showing an object-id-keyed session surviving it.
 Keep `email_claim` pointed at the email or UPN claim. It is still the right
 thing to *display*, and it gives identifier matching a second route.
 
+### Encrypting the assertion
+
+Entra can encrypt the SAML assertion. Generate an SP keypair, paste the
+certificate and private key into the connection, upload the same certificate
+under **Token encryption** on the enterprise application and activate it, then
+tick *Require the assertion to be encrypted*. Both sides must be configured —
+enabling only one gives a rejected assertion rather than a silent downgrade,
+which is the intended outcome.
+
+### What Entra does not do
+
+For OIDC clients Entra supports neither **DPoP** nor **encrypted ID tokens**.
+Both options exist on the connection and will simply have no effect against
+Entra: the dashboard will report the token as unbound and unencrypted, and in
+this case that is the provider rather than your configuration. Refresh tokens do
+work — add `offline_access` to the app registration's API permissions.
+
 ### SCIM
 
 Enterprise application → **Provisioning** → Automatic. Requires Entra ID P1 or
@@ -258,15 +275,36 @@ sends `active` as the **string** `"False"` when deactivating.
 
 ### OIDC
 
-Applications → Create App Integration → **OIDC** → Web Application.
+Applications → Create App Integration → **OIDC - OpenID Connect**, then choose
+**Web Application** as the application type.
+
+> **This is the decision to get right first.** Picking **Single-Page
+> Application** instead is easy and plausible — SPA sounds like the modern
+> default and the wizard offers it prominently — but a SPA is a *public* client.
+> Okta then shows **Client authentication: None** on the General tab, there is
+> no CLIENT SECRETS section, and no secret exists for you to copy. The
+> application type cannot be changed after creation: delete the integration and
+> make a new one.
+>
+> If you would rather keep a SPA integration, it can still work — leave Client
+> secret blank here and keep **Use PKCE** ticked, which is a legitimate
+> public-client flow. You lose the client-credentials grant, so that connection
+> cannot be used on the Service access page.
 
 | Field in AuthLab | Value |
 |---|---|
 | Issuer | `https://<org>.okta.com/oauth2/default`, or your custom authorization server |
-| Client ID / secret | From the app's General tab |
+| Client ID / secret | From the app's General tab → Client Credentials |
 | Scopes | `openid profile email groups` |
 
-Set the Sign-in redirect URI to the callback shown on the connection page.
+Unlike Entra, Okta lets you view the client secret again later — it stays on the
+General tab, so a missed copy is not a lost secret. You can also hold more than
+one active at a time, which is how rotation works.
+
+Set the Sign-in redirect URI to the callback shown on the connection page. If
+you want the Okta app tile to work, set **Login initiated by** to *Either Okta
+or App* and put `<BASE_URL>/auth/oidc/<slug>/login` in **Initiate login URI** —
+that starts a normal code flow rather than pushing a token at the app.
 
 **Groups need to be added to the authorization server**, not just the app.
 Security → API → your authorization server → Claims → Add Claim:
@@ -326,6 +364,33 @@ as needed. **Test API Credentials** verifies reachability.
 
 Okta uses `PUT` for updates rather than `PATCH` in some configurations; both
 are implemented.
+
+### Token security options
+
+All four are off by default here and need matching configuration at Okta.
+
+**Refresh tokens.** Tick **Refresh Token** under Grant type on the app, make
+sure `offline_access` is available on the authorization server, then enable
+*Request a refresh token* on the connection. Okta's refresh token rotation
+setting is on the app's General tab; with rotation on, each refresh returns a
+replacement and invalidates the previous one.
+
+**DPoP.** Okta supports sender-constrained tokens. Enable *Require Demonstrating
+Proof of Possession (DPoP) header* on the application's General tab and tick
+*Use DPoP* on the connection. The dashboard then shows the thumbprint the app
+signed with next to the `cnf.jkt` in the token, so binding either happened or it
+did not.
+
+**Encrypted ID tokens.** Tick *Accept encrypted ID tokens*, copy the JWKS URL
+the connection page then shows, and register it as the client's JWKS at Okta.
+Tokens continuing to arrive unencrypted usually means the URL is not registered
+or is unreachable from Okta — the dashboard reports which actually arrived.
+
+**Custom claims.** Anything you add under Security → API → your authorization
+server → Claims arrives in the token and is listed in full on the dashboard. To
+*demand* a claim rather than hope for it, put a claims request in the
+connection's `claims` field, and add an expectation so every sign-in reports
+pass or fail on it.
 
 ---
 

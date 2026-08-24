@@ -28,6 +28,13 @@ Also covers the traps that are not obvious from a provider's own documentation:
   replaced by a pointer to Microsoft Graph that this app does not follow.
 - **Okta and Auth0 group claims** — neither emits groups until you configure it,
   on the authorization server and via an Action respectively.
+- **Which Okta app type to create** — Web Application, not Single-Page
+  Application. A SPA is a public client, so Okta shows "Client authentication:
+  None" and there is no client secret to find, and the type cannot be changed
+  afterwards.
+- **What each provider will not do** — Entra supports neither DPoP nor
+  encrypted ID tokens for OIDC, so those options having no effect there is the
+  provider and not your setup.
 
 ## [deployment-urls.md](deployment-urls.md)
 

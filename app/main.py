@@ -127,7 +127,7 @@ app = FastAPI(
         "IdP-agnostic harness for OIDC/OAuth 2.0, SAML 2.0, SCIM 2.0 provisioning, "
         "access token validation, and Conditional Access evaluation."
     ),
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
     # The interactive docs are genuinely useful here — they give the SCIM
     # endpoints a browsable reference without writing one.

@@ -9,7 +9,7 @@ be, what it produces, and what changes when the app moves off your laptop.
 
 ## Contents
 
-- [One setting, four URLs](#one-setting-four-urls)
+- [One setting, every URL](#one-setting-every-url)
 - [The distinction that matters: who connects to whom](#the-distinction-that-matters-who-connects-to-whom)
 - [Running locally](#running-locally)
 - [Provisioning against a local instance](#provisioning-against-a-local-instance)
@@ -22,21 +22,38 @@ be, what it produces, and what changes when the app moves off your laptop.
 
 ---
 
-## One setting, four URLs
+## One setting, every URL
 
-`BASE_URL` must equal the app's own externally visible URL. From it the app
-derives, in [app/auth/connections.py](../app/auth/connections.py):
+`BASE_URL` must equal the app's own externally visible URL. Everything the app
+hands to a provider is derived from it:
 
-| Derived URL | Used by |
-|---|---|
-| `<BASE_URL>/auth/oidc/<slug>/callback` | OIDC redirect URI, registered at the provider |
-| `<BASE_URL>/auth/saml/<slug>/acs` | SAML Assertion Consumer Service |
-| `<BASE_URL>/auth/saml/<slug>/sls` | SAML Single Logout Service |
-| `<BASE_URL>/scim/v2` | SCIM tenant URL, pasted into the provisioning config |
+| Derived URL | Used by | Always needed? |
+|---|---|---|
+| `<BASE_URL>/auth/oidc/<slug>/callback` | OIDC redirect URI | Yes, for OIDC |
+| `<BASE_URL>/` | OIDC post-logout redirect URI | Whenever federated sign-out is used |
+| `<BASE_URL>/auth/oidc/<slug>/login` | Initiate login URI (IdP-initiated sign-in) | Only for a provider app tile |
+| `<BASE_URL>/auth/oidc/<slug>/jwks.json` | The client's `jwks_uri` | Only for encrypted ID tokens |
+| `<BASE_URL>/auth/saml/<slug>/acs` | SAML Assertion Consumer Service | Yes, for SAML |
+| `<BASE_URL>/auth/saml/<slug>/sls` | SAML Single Logout Service | For single logout in either direction |
+| `<BASE_URL>/auth/saml/<slug>/metadata` | SP metadata, for the provider to import | Optional, but it fills in the rest |
+| `<BASE_URL>/scim/v2` | SCIM tenant URL | Yes, for provisioning |
 
 They are computed rather than stored so they cannot drift out of sync with where
 the app is actually running. Each connection page displays its own set with copy
-buttons, and the SCIM tenant URL is on Admin → SCIM.
+buttons, the SCIM tenant URL is on Admin → SCIM, and `terraform output
+idp_configuration` prints the lot for a deployment.
+
+Two are easy to miss because nothing obviously fails without them until it does:
+
+- **The post-logout redirect URI.** Federated sign-out sends
+  `post_logout_redirect_uri`, and providers reject a value that is not
+  registered. Sign-in works perfectly; only "sign out everywhere" breaks, with
+  an error at the provider that does not point back here.
+- **The JWKS URL.** Only relevant with encrypted ID tokens, but that is the
+  surprising direction of travel: the *client* publishes a key set and the
+  provider fetches it. If it is not registered, most providers silently fall
+  back to sending a plaintext token — which the dashboard reports, since a
+  quiet downgrade is worse than an error.
 
 `BASE_URL` also decides one thing that is easy to miss: the session cookie's
 `Secure` flag is set when it starts with `https://`. A production deployment

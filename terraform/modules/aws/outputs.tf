@@ -57,13 +57,21 @@ output "idp_configuration" {
   description = <<-EOT
     Every value an identity provider needs. Replace {slug} with the connection
     slug you choose in the admin console.
+
+    oidc_post_logout_uri must be registered too, or federated sign-out is
+    refused by the provider. oidc_initiate_login is only needed for IdP-initiated
+    sign-in (Okta's "Initiate login URI"), and oidc_jwks_url only when accepting
+    encrypted ID tokens — register it as the client's jwks_uri.
   EOT
   value = {
-    oidc_redirect_uri = "${local.base_url}/auth/oidc/{slug}/callback"
-    saml_acs_url      = "${local.base_url}/auth/saml/{slug}/acs"
-    saml_sls_url      = "${local.base_url}/auth/saml/{slug}/sls"
-    saml_metadata_url = "${local.base_url}/auth/saml/{slug}/metadata"
-    scim_tenant_url   = "${local.base_url}/scim/v2"
+    oidc_redirect_uri    = "${local.base_url}/auth/oidc/{slug}/callback"
+    oidc_post_logout_uri = "${local.base_url}/"
+    oidc_initiate_login  = "${local.base_url}/auth/oidc/{slug}/login"
+    oidc_jwks_url        = "${local.base_url}/auth/oidc/{slug}/jwks.json"
+    saml_acs_url         = "${local.base_url}/auth/saml/{slug}/acs"
+    saml_sls_url         = "${local.base_url}/auth/saml/{slug}/sls"
+    saml_metadata_url    = "${local.base_url}/auth/saml/{slug}/metadata"
+    scim_tenant_url      = "${local.base_url}/scim/v2"
   }
 }
 

@@ -712,7 +712,15 @@ What is deliberate, in case you are adapting this:
   one parser's idea of a URL and another's.
 - **IdP client secrets are encrypted at rest** with a key derived from
   `APP_SECRET_KEY` via HKDF, and never rendered back to the browser or included
-  in an export.
+  in an export. The DPoP signing key and the ID-token decryption key are held to
+  the same rules — they are private keys the app generated rather than values
+  anyone pasted, but that makes them more sensitive rather than less.
+- **Refresh tokens are encrypted at rest too.** A refresh token outlives the
+  session that produced it, so storing one in the clear would be worse than not
+  offering the feature.
+- **The DPoP key is never published.** The JWKS endpoint serves only the
+  encryption key; possession of the signing key is proved by using it, which is
+  the entire point.
 - **Passwords use Argon2**; SCIM and API bearer tokens are stored as keyed
   hashes and compared in constant time.
 - **Changing your own password requires the current one**, even though the
@@ -757,7 +765,17 @@ Honest scope, so nobody is surprised:
   tokens expose them only through their own introspection endpoint; the
   inspector says so rather than failing obscurely.
 - **Expectations are evaluated at sign-in**, against the claims that sign-in
-  produced. They are not a continuous policy monitor.
+  produced — and at refresh, against whatever the refresh returned. They are not
+  a continuous policy monitor.
+- **DPoP is implemented for the token endpoint, not for resource requests.**
+  Proofs are sent when obtaining and refreshing tokens, and the binding the
+  provider applied is verified and displayed. Presenting a bound token onward to
+  a resource server would need an `ath` proof per call; the helper builds one,
+  but nothing here consumes it.
+- **Provider support for DPoP and encrypted ID tokens is uneven.** Entra ID
+  supports neither for OIDC. Where a provider ignores the request the app
+  reports what it actually received rather than failing, which is the useful
+  behaviour but does mean a green connection is not proof the feature is on.
 - **Terraform state contains secrets** in plaintext, and the databases are
   created with public endpoints so a first deployment needs no VPC work. Both
   need addressing before this holds anything you care about.

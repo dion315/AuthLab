@@ -1,6 +1,6 @@
 [project]
 name = "authlab"
-version = "1.1.0"
+version = "1.2.0"
 description = "IdP-agnostic harness for OIDC/OAuth 2.0, SAML 2.0, SCIM 2.0 provisioning, access token validation, and Conditional Access evaluation."
 requires-python = ">=3.11"
 
