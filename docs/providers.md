@@ -4,6 +4,12 @@ Per-provider setup for OIDC, SAML, and SCIM. The app is written against the
 specifications rather than against any vendor, so most of this is "which value
 goes in which box" rather than special cases.
 
+> **The running app has all of this built in.** Sign in and open **Help** for
+> the same steps with your own redirect URI and ACS URL substituted in and
+> ready to copy, and set a connection's provider to get each field annotated
+> with that product's own wording. This page is the same material as prose, for
+> reading outside the app.
+
 Console navigation changes constantly, so this describes **what each value is**
 rather than pretending to give click-by-click paths. Where something is genuinely
 uncertain, the answer is to use **Admin → connection → Test configuration**,

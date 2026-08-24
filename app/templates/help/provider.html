@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% set active_nav = 'help' %}
+{% block title %}{{ provider.name }}{% endblock %}
+
+{% block content %}
+<h1>{{ provider.name }}</h1>
+<p class="muted small">
+  <a href="/help">← All guides</a>
+  {% if connection %} · using the real URLs for <strong>{{ connection.name }}</strong>{% endif %}
+</p>
+
+<div class="card">
+  <div class="btn-row mt-0">
+    {% for key, label in protocol_names.items() %}
+      {% if provider.supports(key) %}
+      <a class="btn {{ '' if key == protocol else 'btn-quiet' }}"
+         href="/help/{{ provider.key }}?protocol={{ key }}{% if slug %}&amp;slug={{ slug }}{% endif %}">{{ label }}</a>
+      {% else %}
+      <span class="btn btn-quiet trace-skip">{{ label }} — not available</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% if provider.blurb %}<p class="field-help">{{ provider.blurb }}</p>{% endif %}
+</div>
+
+{% if not guide %}
+<div class="card">
+  <p class="muted small">No guide for this protocol yet.</p>
+</div>
+
+{% elif not guide.supported %}
+<div class="card">
+  <h3>{{ protocol_names[protocol] }} is not available with {{ provider.name }}</h3>
+  <div class="flash flash-warn">{{ guide.unsupported_reason }}</div>
+  <div class="btn-row">
+    {% for key, label in protocol_names.items() %}
+      {% if provider.supports(key) %}
+      <a class="btn btn-quiet" href="/help/{{ provider.key }}?protocol={{ key }}{% if slug %}&amp;slug={{ slug }}{% endif %}">Use {{ label }} instead</a>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+
+{% else %}
+
+{% if not using_real_urls and connections %}
+<div class="card">
+  <div class="flash flash-warn">
+    These steps show <code>{slug}</code> where a connection slug goes. Pick a
+    connection to have your own URLs substituted in and made copyable.
+  </div>
+  <form method="get" action="/help/{{ provider.key }}" class="btn-row">
+    <input type="hidden" name="protocol" value="{{ protocol }}" />
+    <select name="slug">
+      {% for c in connections %}
+      <option value="{{ c.slug }}">{{ c.name }} ({{ c.protocol|upper }})</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn-quiet">Use these URLs</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>{{ protocol_names[protocol] }}</h3>
+  {% if guide.summary %}<p class="muted small">{{ guide.summary }}</p>{% endif %}
+
+  <ol class="steps">
+    {% for step in steps %}
+    <li>
+      <div class="step-title">{{ step.title }}</div>
+      <div class="muted small">{{ step.body }}</div>
+      {% if step.paste %}
+      <div class="copyable mt-xs">
+        <input type="text" id="paste-{{ step.number }}" value="{{ step.paste }}" readonly />
+        <button type="button" class="btn-quiet" data-copy-target="paste-{{ step.number }}">Copy</button>
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+
+{% if guide.terms %}
+<div class="card">
+  <h3>What {{ provider.name }} calls each setting</h3>
+  <p class="muted small">
+    The same translation appears beside each field on the connection form once
+    you set the provider there.
+  </p>
+  <div class="table-scroll">
+    <table>
+      <tr><th>In this app</th><th>In {{ provider.name }}</th><th>Where</th></tr>
+      {% for term in guide.terms %}
+      <tr class="claim-row">
+        <td class="mono">{{ term.key }}</td>
+        <td><strong>{{ term.their_name }}</strong>{% if term.note %}<br /><span class="muted small">{{ term.note }}</span>{% endif %}</td>
+        <td class="muted small">{{ term.where }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if guide.gotchas %}
+<div class="card">
+  <h3>Things that catch people out</h3>
+  <ul class="gotchas">
+    {% for gotcha in guide.gotchas %}
+    <li class="muted small">{{ gotcha }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Next</h3>
+  <div class="btn-row">
+    {% if connection %}
+    <a class="btn" href="/admin/connections/{{ connection.id }}">Back to {{ connection.name }}</a>
+    {% else %}
+    <a class="btn" href="/admin/connections/new?protocol={{ 'saml' if protocol == 'saml' else 'oidc' }}&amp;provider={{ provider.key }}">Create the connection</a>
+    {% endif %}
+    {% if protocol != 'scim' and provider.supports('scim') %}
+    <a class="btn btn-quiet" href="/help/{{ provider.key }}?protocol=scim{% if slug %}&amp;slug={{ slug }}{% endif %}">Set up provisioning too</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

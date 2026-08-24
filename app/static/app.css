@@ -183,7 +183,31 @@ textarea { min-height: 90px; font-family: var(--mono); font-size: 12px; }
 .align-right { text-align: right; }
 .push-right { margin-left: auto; }
 .mt-0 { margin-top: 0; }
+.mt-xs { margin-top: 8px; }
 .mt-sm { margin-top: 10px; }
 .mt-md { margin-top: 14px; }
 .mt-lg { margin-top: 20px; }
 .narrow { max-width: 320px; }
+
+/* --- setup guides --- */
+.steps { margin: 0; padding-left: 20px; }
+.steps > li { margin-bottom: 18px; }
+.steps > li::marker { color: var(--muted); font-size: 13px; }
+.step-title { font-weight: 600; margin-bottom: 3px; }
+.gotchas { margin: 0; padding-left: 18px; }
+.gotchas > li { margin-bottom: 10px; }
+
+/* --- per-provider terminology hints on the connection form --- */
+.vocab {
+  display: none;
+  margin: 4px 0 0;
+  padding: 7px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--surface-2);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+}
+.vocab.shown { display: block; }
+.vocab-their-name { font-weight: 600; color: var(--text); }
+.vocab-where { color: var(--muted); }
+.vocab-note { color: var(--muted); display: block; margin-top: 2px; }

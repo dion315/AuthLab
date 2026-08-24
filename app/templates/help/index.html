@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% set active_nav = 'help' %}
+{% block title %}Setup guides{% endblock %}
+
+{% block content %}
+<h1>Setup guides</h1>
+<p class="muted small">
+  Step-by-step configuration for each provider, with your own redirect URIs and
+  ACS URLs substituted into the instructions.
+</p>
+
+<div class="card">
+  <h3>What each provider can do</h3>
+  <p class="muted small">
+    SCIM is not part of OIDC or SAML — it is a separate protocol with its own
+    token, and it works alongside any connection or none. What varies is whether
+    a product can <em>send</em> it. Three of these cannot, which is worth knowing
+    before you go looking for the menu.
+  </p>
+  <div class="table-scroll">
+    <table>
+      <tr>
+        <th>Provider</th>
+        <th>OIDC</th>
+        <th>SAML</th>
+        <th>SCIM</th>
+        <th></th>
+      </tr>
+      {% for row in matrix %}
+      <tr>
+        <td>
+          <strong>{{ row.name }}</strong>
+          <br /><span class="muted small">{{ row.blurb }}</span>
+        </td>
+        {% for protocol in ['oidc', 'saml', 'scim'] %}
+        <td>
+          {% if row.protocols[protocol].supported %}
+          <a href="/help/{{ row.key }}?protocol={{ protocol }}">Guide</a>
+          {% else %}
+          <span class="trace-skip" title="{{ row.protocols[protocol].reason }}">no</span>
+          {% endif %}
+        </td>
+        {% endfor %}
+        <td class="align-right"><a href="/help/{{ row.key }}">Open →</a></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+{% if connections %}
+<div class="card">
+  <h3>For a connection you have already made</h3>
+  <p class="muted small">
+    Open a guide from a connection and the steps carry that connection's real
+    URLs, ready to copy.
+  </p>
+  <div class="table-scroll">
+    <table>
+      <tr><th>Connection</th><th>Protocol</th><th>Provider</th><th></th></tr>
+      {% for connection in connections %}
+      <tr>
+        <td><strong>{{ connection.name }}</strong> <span class="muted mono">{{ connection.slug }}</span></td>
+        <td><span class="badge">{{ connection.protocol|upper }}</span></td>
+        <td class="muted">{{ connection.provider or 'not stated' }}</td>
+        <td class="align-right">
+          {% if connection.provider %}
+          <a href="/help/{{ connection.provider }}?protocol={{ connection.protocol }}&amp;slug={{ connection.slug }}">Guide with my URLs</a>
+          {% else %}
+          <a href="/admin/connections/{{ connection.id }}">Set the provider</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Before you start</h3>
+  <p class="muted small">
+    <strong>Sign-in works on localhost; provisioning does not.</strong> An OIDC or
+    SAML flow is carried by your browser, which can reach both ends. SCIM is a
+    direct call from the provider's own servers to yours, so it cannot reach
+    <code>localhost</code> or a private endpoint at all. To test provisioning
+    locally, put a tunnel in front of the app and set <code>BASE_URL</code> to it.
+  </p>
+  <p class="field-help">
+    This app currently believes it is at <code>{{ base_url }}</code>. Every
+    redirect URI, ACS URL, and the SCIM tenant URL are derived from that, so if
+    it is wrong, everything the guides tell you to paste is wrong too.
+  </p>
+</div>
+{% endblock %}

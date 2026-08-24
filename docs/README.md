@@ -4,6 +4,9 @@
 out, and what each feature is for. These are the two things that were too long
 to live there.
 
+> Both of these also exist inside the running app: **Help** in the navigation
+> has the same provider guides, with your own URLs substituted in.
+
 ## [providers.md](providers.md)
 
 Per-provider setup for OIDC, SAML, and SCIM: **Microsoft Entra ID, Okta, Auth0,

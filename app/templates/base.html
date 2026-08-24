@@ -21,6 +21,7 @@
       <a href="/admin/service-access">Service access</a>
       <a href="/admin/automation">Automation</a>
       {% endif %}
+      <a href="/help" class="{{ 'active' if active_nav == 'help' }}">Help</a>
     </nav>
     <div class="topbar-user">
       <span class="badge role-{{ session.role }}">{{ session.role }}</span>

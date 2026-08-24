@@ -170,9 +170,13 @@ app/
     filters.py        A real SCIM filter parser (tokeniser + recursive descent)
     router.py         Users, Groups, ServiceProviderConfig, ResourceTypes, Schemas
 
+  providers.py        Per-provider vocabulary and setup steps (one source for
+                      the form hints and the in-app guides)
+
   routes/
     pages.py          Landing page, dashboard, weather proxy, health checks
     account.py        Self-service password change, step-up challenge page
+    help.py           The in-app setup guides
     admin.py          The admin console
     api.py            The automation API
 
@@ -181,7 +185,7 @@ app/
 
 docs/                 Per-provider setup, and URLs/reachability
 terraform/            Azure, AWS, and GCP modules
-tests/                287 tests
+tests/                348 tests
 ```
 
 A few decisions your developers may find worth copying:
@@ -231,9 +235,16 @@ from `{issuer}/.well-known/openid-configuration`.
 
 Pasting the full discovery URL works too — the suffix is stripped.
 
-[docs/providers.md](docs/providers.md) has step-by-step setup for Entra ID,
-Okta, Auth0, AWS Cognito, Duo, and anything else — for OIDC, SAML, and SCIM —
-including which of them can actually send SCIM and which cannot.
+**The app has the setup guides built in.** Tell a connection which product is
+at the other end and every field shows that product's own wording beside it —
+"Issuer" here is "Directory (tenant) ID" at Entra, "Audience URI" at Okta — and
+**Help** carries step-by-step instructions with your own redirect URI and ACS
+URL already substituted in and copyable. Covers Entra ID, Okta, Auth0, AWS
+Cognito, Duo, and generic providers, for OIDC, SAML, and SCIM, and says plainly
+which of them cannot send SCIM at all.
+
+[docs/providers.md](docs/providers.md) is the same material as prose, for
+reading outside the app.
 
 The connection page shows the exact redirect URI to register at the provider.
 It is derived from `BASE_URL`, so if that is wrong you will get a redirect-URI
@@ -626,14 +637,14 @@ pytest tests -q
 ruff check app tests
 ```
 
-287 tests, covering the SCIM request shapes real connectors send (including the
+348 tests, covering the SCIM request shapes real connectors send (including the
 two Entra quirks above), the filter parser, role mapping from both claims and
 SCIM groups, expectation evaluation, session revocation across mismatched
 identifiers, access token validation, the automation API and its scopes, schema
 reconciliation, the open-redirect guard, authorisation guards, output escaping,
 secret encryption, administrator password reconciliation across restarts,
-SCIM's independence from both SSO protocols, Entra NameID stability, and
-that every page renders.
+SCIM's independence from both SSO protocols, Entra NameID stability, the
+consistency of the provider guides, and that every page renders.
 
 ---
 

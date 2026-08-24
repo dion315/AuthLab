@@ -36,6 +36,7 @@ from app.models import PASSWORD_SOURCE_ENV, Base
 from app.routes.account import router as account_router
 from app.routes.admin import router as admin_router
 from app.routes.api import router as api_router
+from app.routes.help import router as help_router
 from app.routes.pages import router as pages_router
 from app.schema_sync import sync_schema
 from app.scim import schemas as scim_schemas
@@ -297,6 +298,7 @@ def favicon() -> Response:
 app.include_router(pages_router, tags=["app"])
 app.include_router(auth_router, tags=["auth"])
 app.include_router(account_router, tags=["account"])
+app.include_router(help_router, tags=["help"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
 app.include_router(api_router, tags=["automation"])
 app.include_router(scim_router, prefix="/scim/v2", tags=["scim"])

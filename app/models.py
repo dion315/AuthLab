@@ -123,6 +123,12 @@ class IdpConnection(Base):
     protocol: Mapped[str] = mapped_column(String(10), nullable=False)  # "oidc" | "saml"
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # Which product is at the other end — see app/providers.py. Purely
+    # advisory: it selects the terminology shown beside each field on the form
+    # and the setup guide linked from it, and never changes protocol behaviour.
+    # Empty means "not stated", which is a legitimate answer.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+
     # Protocol settings. Secret-bearing fields inside are stored encrypted;
     # see app/auth/schemas.py for which ones and app/crypto.py for how.
     config: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), nullable=False, default=dict)

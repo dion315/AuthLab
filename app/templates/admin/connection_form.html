@@ -1,4 +1,14 @@
 {% extends "base.html" %}
+
+{% macro vocab(field_key) -%}
+{%- for provider_key, entry in (vocabulary.get(field_key) or {}).items() %}
+<p class="vocab" data-vocab-for="{{ provider_key }}">
+  <span class="vocab-their-name">{{ entry.provider }} calls this: {{ entry.name }}</span>
+  {% if entry.where %}<span class="vocab-where"> — {{ entry.where }}</span>{% endif %}
+  {% if entry.note %}<span class="vocab-note">{{ entry.note }}</span>{% endif %}
+</p>
+{%- endfor %}
+{%- endmacro %}
 {% set active_nav = 'admin' %}
 {% block title %}{{ connection.name if connection else 'New connection' }}{% endblock %}
 
@@ -80,6 +90,23 @@
              {{ 'checked' if (connection.enabled if connection else True) }} />
       <label for="enabled">Enabled — show on the sign-in page</label>
     </div>
+
+    <label for="provider">Which identity provider is this?</label>
+    <select id="provider" name="provider" data-vocab-select>
+      <option value="">Not stated — no hints</option>
+      {% for key, label in provider_choices %}
+      <option value="{{ key }}" {{ 'selected' if selected_provider == key }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <p class="field-help">
+      Advisory only — it never changes how the protocol behaves. Choosing one
+      shows that product's own wording beside each field below, because the gap
+      between "Issuer" here and "Directory (tenant) ID" over there is where most
+      of the time in a first integration goes.
+      <span data-provider-help-link data-protocol="{{ protocol }}" data-slug="{{ connection.slug if connection else '' }}">
+        <a href="/help{% if selected_provider %}/{{ selected_provider }}?protocol={{ protocol }}{% if connection %}&amp;slug={{ connection.slug }}{% endif %}{% endif %}">Open the step-by-step guide →</a>
+      </span>
+    </p>
   </div>
 
   {% if protocol == 'oidc' %}
@@ -89,6 +116,7 @@
     <label for="issuer">Issuer URL</label>
     <input type="text" id="issuer" name="issuer" value="{{ config.issuer }}"
            placeholder="https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0" />
+    {{ vocab('issuer') }}
     <p class="field-help">
       Everything else is read from <code>{issuer}/.well-known/openid-configuration</code>.
       Pasting the full discovery URL works too — the suffix is stripped.
@@ -99,10 +127,12 @@
 
     <label for="client_id">Client ID</label>
     <input type="text" id="client_id" name="client_id" value="{{ config.client_id }}" />
+    {{ vocab('client_id') }}
 
     <label for="client_secret">Client secret</label>
     <input type="password" id="client_secret" name="client_secret"
            value="{{ config.client_secret }}" autocomplete="new-password" />
+    {{ vocab('client_secret') }}
     <p class="field-help">
       Encrypted before it is stored and never rendered back. Leave as-is to keep
       the current value. Public clients using PKCE only can leave it empty.
@@ -110,6 +140,7 @@
 
     <label for="scopes">Scopes</label>
     <input type="text" id="scopes" name="scopes" value="{{ config.scopes }}" />
+    {{ vocab('scopes') }}
 
     <div class="checkbox">
       <input type="checkbox" id="use_pkce" name="use_pkce" {{ 'checked' if config.use_pkce }} />
@@ -161,15 +192,19 @@
 
     <label for="idp_entity_id">IdP entity ID / issuer</label>
     <input type="text" id="idp_entity_id" name="idp_entity_id" value="{{ config.idp_entity_id }}" />
+    {{ vocab('idp_entity_id') }}
 
     <label for="idp_sso_url">IdP single sign-on URL</label>
     <input type="text" id="idp_sso_url" name="idp_sso_url" value="{{ config.idp_sso_url }}" />
+    {{ vocab('idp_sso_url') }}
 
     <label for="idp_slo_url">IdP single logout URL (optional)</label>
     <input type="text" id="idp_slo_url" name="idp_slo_url" value="{{ config.idp_slo_url }}" />
+    {{ vocab('idp_slo_url') }}
 
     <label for="idp_x509_cert">IdP signing certificate</label>
     <textarea id="idp_x509_cert" name="idp_x509_cert">{{ config.idp_x509_cert }}</textarea>
+    {{ vocab('idp_x509_cert') }}
     <p class="field-help">PEM or bare base64 — both are accepted and normalised. Without this, no assertion can be verified.</p>
   </div>
 
@@ -178,10 +213,12 @@
 
     <label for="sp_entity_id">SP entity ID</label>
     <input type="text" id="sp_entity_id" name="sp_entity_id" value="{{ config.sp_entity_id }}" />
+    {{ vocab('sp_entity_id') }}
     <p class="field-help">Defaults to this connection's metadata URL if left blank.</p>
 
     <label for="name_id_format">NameID format</label>
     <input type="text" id="name_id_format" name="name_id_format" value="{{ config.name_id_format }}" />
+    {{ vocab('name_id_format') }}
 
     <div class="checkbox">
       <input type="checkbox" id="want_assertions_signed" name="want_assertions_signed"
@@ -236,11 +273,13 @@
         <label for="subject_claim">Subject</label>
         <input type="text" id="subject_claim" name="subject_claim"
                value="{{ connection.subject_claim if connection else ('sub' if protocol == 'oidc' else 'nameId') }}" />
+    {{ vocab('subject_claim') }}
       </div>
       <div>
         <label for="email_claim">Email</label>
         <input type="text" id="email_claim" name="email_claim"
                value="{{ connection.email_claim if connection else 'email' }}" />
+    {{ vocab('email_claim') }}
       </div>
       <div>
         <label for="name_claim">Display name</label>
@@ -255,6 +294,7 @@
     <label for="role_claim">Claim carrying groups or roles</label>
     <input type="text" id="role_claim" name="role_claim"
            value="{{ connection.role_claim if connection else 'roles' }}" />
+    {{ vocab('role_claim') }}
     <p class="field-help">
       Entra: <code>roles</code> for app roles, <code>groups</code> for group ids ·
       Okta: <code>groups</code> ·

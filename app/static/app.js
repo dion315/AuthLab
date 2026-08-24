@@ -125,4 +125,43 @@
     var row = event.target.closest(".rule-row");
     if (row) row.remove();
   });
+
+  // --- per-provider terminology hints ---------------------------------------
+  // Every provider's wording for every field is rendered up front and hidden;
+  // choosing one just reveals the matching set. Doing it in the browser rather
+  // than by reloading the form matters because the form is usually half filled
+  // in by the time somebody realises they want the hints.
+  var vocabSelect = document.querySelector("[data-vocab-select]");
+  if (vocabSelect) {
+    // Protocol and slug come from the container rather than from a form
+    // field: the hidden protocol input only exists when creating a connection,
+    // and the edit page still needs both in the link.
+    var helpHolder = document.querySelector("[data-provider-help-link]");
+    var helpLink = helpHolder ? helpHolder.querySelector("a") : null;
+    var protocol = helpHolder ? helpHolder.getAttribute("data-protocol") || "" : "";
+    var slug = helpHolder ? helpHolder.getAttribute("data-slug") || "" : "";
+
+    var applyVocab = function () {
+      var chosen = vocabSelect.value;
+      var hints = document.querySelectorAll(".vocab");
+      for (var i = 0; i < hints.length; i++) {
+        var matches = chosen && hints[i].getAttribute("data-vocab-for") === chosen;
+        hints[i].classList.toggle("shown", !!matches);
+      }
+      if (helpLink) {
+        var query = [];
+        if (protocol) query.push("protocol=" + encodeURIComponent(protocol));
+        if (slug) query.push("slug=" + encodeURIComponent(slug));
+        helpLink.href = chosen
+          ? "/help/" + encodeURIComponent(chosen) + (query.length ? "?" + query.join("&") : "")
+          : "/help";
+        helpLink.textContent = chosen
+          ? "Open the step-by-step guide for this provider →"
+          : "Browse the setup guides →";
+      }
+    };
+
+    vocabSelect.addEventListener("change", applyVocab);
+    applyVocab();
+  }
 })();

@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import events
+from app import events, providers
 from app.auth import apitoken, oidc, saml
 from app.auth import connections as conn
 from app.auth import expectations as expectation_engine
@@ -117,7 +117,13 @@ def _parse_expectations(form: Any) -> list[dict[str, str]]:
 
 
 def _apply_assertion_fields(connection: IdpConnection, form: Any) -> None:
-    """Expectation and step-up settings, shared by create and update."""
+    """Provider hint, expectation, and step-up settings — create and update."""
+    # Advisory only: it selects which vocabulary the form shows and which guide
+    # it links to. An unknown value is stored as empty rather than rejected,
+    # since nothing depends on it.
+    provider_key = str(form.get("provider", "")).strip()
+    connection.provider = provider_key if providers.get(provider_key) else ""
+
     role_source = str(form.get("role_source", "claims"))
     connection.role_source = role_source if role_source in ROLE_SOURCES else "claims"
 
@@ -168,6 +174,7 @@ def overview(
 def new_connection_form(
     request: Request,
     protocol: str = "oidc",
+    provider: str = "",
     session: UserSession = Depends(admin_only),
 ) -> Response:
     if protocol not in SETTINGS_MODELS:
@@ -185,6 +192,10 @@ def new_connection_form(
             "roles": ROLES,
             "role_sources": ROLE_SOURCES,
             "expectation_operators": expectation_engine.OPERATORS,
+            # Arriving from a setup guide preselects the provider it was for.
+            "selected_provider": provider if providers.get(provider) else "",
+            "provider_choices": providers.choices(),
+            "vocabulary": providers.vocabulary(protocol),
             "urls": {},
             "errors": [],
         },
@@ -279,6 +290,9 @@ def edit_connection_form(
             "roles": ROLES,
             "role_sources": ROLE_SOURCES,
             "expectation_operators": expectation_engine.OPERATORS,
+            "selected_provider": connection.provider or "",
+            "provider_choices": providers.choices(),
+            "vocabulary": providers.vocabulary(connection.protocol),
             "urls": urls,
             "errors": [],
             "message": request.query_params.get("message", ""),
