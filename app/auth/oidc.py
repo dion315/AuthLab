@@ -23,6 +23,7 @@ import httpx
 from authlib.jose import JsonWebKey, jwt
 from authlib.oidc.core import CodeIDToken
 
+from app.auth import dpop, tokencrypto
 from app.auth.connections import load_settings, redirect_uri
 from app.auth.schemas import OidcSettings
 from app.models import IdpConnection
@@ -123,6 +124,20 @@ def invalidate_cache(issuer: str = "") -> None:
 # --- authorization request ---------------------------------------------------
 
 
+def requested_scopes(settings: OidcSettings) -> str:
+    """The scope string actually sent.
+
+    `offline_access` is appended rather than left to the operator because it is
+    the scope that makes a provider issue a refresh token, and "I ticked the
+    box and got no refresh token" is otherwise a puzzling place to end up.
+    Duplicates are avoided in case somebody has already listed it.
+    """
+    scopes = [s for s in (settings.scopes or "").split() if s]
+    if settings.request_refresh_token and "offline_access" not in scopes:
+        scopes.append("offline_access")
+    return " ".join(scopes)
+
+
 def _pkce_pair() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(64)[:96]
     challenge = (
@@ -169,7 +184,7 @@ async def build_authorization_request(
         "response_type": "code",
         "client_id": settings.client_id,
         "redirect_uri": redirect_uri(connection.slug),
-        "scope": settings.scopes,
+        "scope": requested_scopes(settings),
         "state": state,
         "nonce": nonce,
     }
@@ -202,9 +217,85 @@ async def build_authorization_request(
 # --- callback ----------------------------------------------------------------
 
 
+async def _post_token_request(
+    settings: OidcSettings, token_endpoint: str, form: dict[str, str]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """POST to the token endpoint, carrying a DPoP proof when configured.
+
+    Returns (payload, dpop_report). The report is for display: what we signed
+    with, whether a nonce round trip was needed, and the proof itself decoded.
+
+    The nonce retry is the part worth understanding. A server may refuse a first
+    proof with `use_dpop_nonce` and hand back a `DPoP-Nonce` header, expecting
+    the same request again with that nonce inside the proof. That is ordinary
+    protocol traffic rather than an error, so it is retried once, silently to
+    the caller but visibly in the report.
+    """
+    headers = {"Accept": "application/json"}
+    report: dict[str, Any] = {"used": False}
+
+    if settings.use_dpop:
+        report["used"] = True
+        report["thumbprint"] = dpop.thumbprint(settings.dpop_private_key)
+
+    async def send(nonce: str = "") -> tuple[httpx.Response, str]:
+        request_headers = dict(headers)
+        proof = ""
+        if settings.use_dpop:
+            proof = dpop.create_proof(
+                settings.dpop_private_key,
+                method="POST",
+                url=token_endpoint,
+                nonce=nonce,
+            )
+            request_headers["DPoP"] = proof
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            return await client.post(token_endpoint, data=form, headers=request_headers), proof
+
+    response, proof = await send()
+
+    if settings.use_dpop and response.status_code >= 400:
+        nonce = response.headers.get("DPoP-Nonce", "")
+        body = {}
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if nonce and body.get("error") == "use_dpop_nonce":
+            report["nonce_required"] = True
+            report["nonce"] = nonce
+            response, proof = await send(nonce)
+
+    if proof:
+        report["proof"] = dpop.describe_proof(proof)
+
+    try:
+        payload = response.json()
+    except ValueError:
+        raise OidcError(
+            f"Token endpoint returned HTTP {response.status_code} with a non-JSON body.",
+            detail={"status": response.status_code, "body": response.text[:1000]},
+        ) from None
+
+    if response.status_code >= 400 or "error" in payload:
+        # Surfaced rather than swallowed: this is where Conditional Access
+        # denials and consent failures show up with their real error codes.
+        raise OidcError(
+            "The IdP rejected the token request.",
+            code=str(payload.get("error", f"http_{response.status_code}")),
+            description=str(payload.get("error_description", "")),
+            detail={"status": response.status_code, "response": payload, "dpop": report},
+        )
+
+    # A DPoP-bound token is issued as token_type "DPoP" rather than "Bearer".
+    report["token_type"] = str(payload.get("token_type", ""))
+    return payload, report
+
+
 async def exchange_code(
     connection: IdpConnection, *, code: str, code_verifier: str | None
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Trade the authorization code for tokens. Returns (payload, dpop_report)."""
     settings = load_settings(connection)
     assert isinstance(settings, OidcSettings)
     discovery = await fetch_discovery(settings)
@@ -226,39 +317,70 @@ async def exchange_code(
     if settings.client_secret:
         form["client_secret"] = settings.client_secret
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        response = await client.post(
-            token_endpoint,
-            data=form,
-            headers={"Accept": "application/json"},
+    return await _post_token_request(settings, token_endpoint, form)
+
+
+async def refresh_tokens(
+    connection: IdpConnection, *, refresh_token: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Exchange a refresh token for a fresh set. Returns (payload, dpop_report).
+
+    What makes this interesting to run deliberately: a refresh is the one way
+    access is extended *without* a new authentication, so it is where you find
+    out whether your provider re-evaluates policy at refresh time or only at
+    sign-in, and whether it rotates the refresh token on use.
+    """
+    settings = load_settings(connection)
+    assert isinstance(settings, OidcSettings)
+
+    # Checked before discovery: there is no point reaching out to the provider
+    # to discover an endpoint we have nothing to send to, and a network error
+    # would bury the actual problem.
+    if not refresh_token:
+        raise OidcError(
+            "This session has no refresh token. Enable 'Request a refresh token' "
+            "on the connection and sign in again — the token is only issued when "
+            "offline_access is requested at authentication time."
         )
 
-    try:
-        payload = response.json()
-    except ValueError:
-        raise OidcError(
-            f"Token endpoint returned HTTP {response.status_code} with a non-JSON body.",
-            detail={"status": response.status_code, "body": response.text[:1000]},
-        ) from None
+    discovery = await fetch_discovery(settings)
+    token_endpoint = discovery.get("token_endpoint", "")
+    if not token_endpoint:
+        raise OidcError("Discovery document contains no token_endpoint.")
 
-    if response.status_code >= 400 or "error" in payload:
-        # Surfaced rather than swallowed: this is where Conditional Access
-        # denials and consent failures show up with their real error codes.
-        raise OidcError(
-            "The IdP rejected the token request.",
-            code=str(payload.get("error", f"http_{response.status_code}")),
-            description=str(payload.get("error_description", "")),
-            detail={"status": response.status_code, "response": payload},
-        )
+    form: dict[str, str] = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": settings.client_id,
+    }
+    if settings.client_secret:
+        form["client_secret"] = settings.client_secret
+    # Narrowing is allowed but not required; sending the same scopes keeps the
+    # comparison between the old and new token honest.
+    scopes = requested_scopes(settings)
+    if scopes:
+        form["scope"] = scopes
 
-    return payload
+    return await _post_token_request(settings, token_endpoint, form)
 
 
 async def validate_id_token(
     connection: IdpConnection, *, id_token: str, nonce: str
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate an ID token, decrypting it first if it arrived as a JWE.
+
+    Returns (claims, encryption_report). Decryption proves only who the token
+    was *for*; the signature check below is what establishes who issued it, and
+    it still runs either way.
+    """
     settings = load_settings(connection)
     assert isinstance(settings, OidcSettings)
+
+    try:
+        id_token, encryption = tokencrypto.unwrap(id_token, settings)
+    except tokencrypto.TokenCryptoError as exc:
+        raise OidcError(str(exc), detail={"stage": "decrypt"}) from exc
+
     discovery = await fetch_discovery(settings)
     key_set = await fetch_jwks(discovery)
 
@@ -278,10 +400,10 @@ async def validate_id_token(
     except Exception as exc:
         raise OidcError(
             f"ID token validation failed: {exc}",
-            detail={"reason": str(exc)},
+            detail={"reason": str(exc), "encryption": encryption},
         ) from exc
 
-    return dict(claims)
+    return dict(claims), encryption
 
 
 async def fetch_userinfo(connection: IdpConnection, access_token: str) -> dict[str, Any]:

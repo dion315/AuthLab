@@ -183,7 +183,84 @@
 
     <label for="claims_request">claims (raw JSON)</label>
     <textarea id="claims_request" name="claims_request" placeholder='{"id_token":{"acr":{"essential":true,"values":["mfa"]}}}'>{{ config.claims_request }}</textarea>
-    <p class="field-help">Sent as the OIDC <code>claims</code> parameter. Used for step-up challenges.</p>
+    <p class="field-help">
+      Sent as the OIDC <code>claims</code> parameter — the standard way to ask
+      for a specific claim or authentication context rather than hoping the
+      provider volunteers it. Two shapes worth knowing:
+    </p>
+    <p class="field-help">
+      <code>{"id_token":{"acr":{"essential":true,"values":["mfa"]}}}</code> demands
+      an authentication context.
+      <code>{"id_token":{"groups":null,"auth_time":{"essential":true}}}</code> asks
+      for optional claims by name. Whatever arrives is listed in full on the
+      dashboard, so start there to find the names your provider uses.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Token security</h3>
+    <p class="muted small">
+      Off by default because each needs matching configuration at the provider,
+      and a half-configured one fails in ways that read as a broken connection.
+    </p>
+
+    <div class="checkbox">
+      <input type="checkbox" id="request_refresh_token" name="request_refresh_token"
+             {{ 'checked' if config.request_refresh_token }} />
+      <label for="request_refresh_token">Request a refresh token</label>
+    </div>
+    <p class="field-help">
+      Adds <code>offline_access</code> to the request, which is what actually
+      makes a provider issue one — and the provider must also allow that scope
+      and the refresh_token grant for this client. The dashboard then offers a
+      Refresh action, which is how you find out whether policy is re-evaluated
+      at refresh time or only at sign-in.
+    </p>
+    <div class="checkbox">
+      <input type="checkbox" id="store_rotated_refresh_token" name="store_rotated_refresh_token"
+             {{ 'checked' if config.store_rotated_refresh_token }} />
+      <label for="store_rotated_refresh_token">Keep the rotated refresh token</label>
+    </div>
+    <p class="field-help">
+      Providers that rotate on use return a replacement and invalidate the old
+      one immediately. Untick to keep the original deliberately and watch the
+      second refresh fail — which is what a stolen, replayed refresh token looks
+      like from the provider's side.
+    </p>
+
+    <div class="checkbox">
+      <input type="checkbox" id="use_dpop" name="use_dpop" {{ 'checked' if config.use_dpop }} />
+      <label for="use_dpop">Use DPoP — sender-constrain the tokens (RFC 9449)</label>
+    </div>
+    <p class="field-help">
+      Signs a proof of possession into a <code>DPoP</code> header on every token
+      request. The provider binds the access token to that key's thumbprint in
+      its <code>cnf.jkt</code> claim, so a stolen token is useless without the
+      key. A keypair is generated when you save and kept afterwards, so the
+      thumbprint stays stable. The dashboard shows whether the provider actually
+      bound the token or ignored the proof.
+    </p>
+
+    <div class="checkbox">
+      <input type="checkbox" id="accept_encrypted_id_token" name="accept_encrypted_id_token"
+             {{ 'checked' if config.accept_encrypted_id_token }} />
+      <label for="accept_encrypted_id_token">Accept encrypted ID tokens (JWE)</label>
+    </div>
+    <p class="field-help">
+      Publishes an encryption public key for the provider to fetch and encrypt
+      to. Register the JWKS URL below as this client's <code>jwks_uri</code>.
+      Support varies — Okta and Ping offer it, Entra does not for OIDC, and
+      several providers accept the setting and send an unencrypted token anyway.
+      A plain signed token is still accepted, and the dashboard says which one
+      actually arrived.
+    </p>
+    {% if connection %}
+    <label for="url-jwks">This connection's JWKS URL</label>
+    <div class="copyable">
+      <input type="text" id="url-jwks" value="{{ urls.jwks_url }}" readonly />
+      <button type="button" class="btn-quiet" data-copy-target="url-jwks">Copy</button>
+    </div>
+    {% endif %}
   </div>
 
   {% else %}
@@ -230,6 +307,24 @@
              {{ 'checked' if config.want_response_signed }} />
       <label for="want_response_signed">Require the response itself to be signed</label>
     </div>
+    <div class="checkbox">
+      <input type="checkbox" id="want_assertions_encrypted" name="want_assertions_encrypted"
+             {{ 'checked' if config.want_assertions_encrypted }} />
+      <label for="want_assertions_encrypted">Require the assertion to be encrypted</label>
+    </div>
+    <div class="checkbox">
+      <input type="checkbox" id="want_nameid_encrypted" name="want_nameid_encrypted"
+             {{ 'checked' if config.want_nameid_encrypted }} />
+      <label for="want_nameid_encrypted">Require the NameID to be encrypted</label>
+    </div>
+    <p class="field-help">
+      Encryption needs the SP keypair below: the IdP encrypts to your
+      certificate and the app decrypts with the private key. Enable it at the
+      provider too — in Entra that is "Token encryption" on the enterprise
+      application, in Okta it is "Assertion Encryption" in the SAML settings.
+      Without both sides configured you get a settings error rather than a
+      silent downgrade, which is the intended outcome.
+    </p>
     <div class="checkbox">
       <input type="checkbox" id="sign_authn_requests" name="sign_authn_requests"
              {{ 'checked' if config.sign_authn_requests }} />

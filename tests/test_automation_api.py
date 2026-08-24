@@ -178,7 +178,15 @@ def test_export_omits_secrets(admin_client, db, api_token, client):
     assert exported["slug"] == "entra"
     assert "client_secret" not in exported["config"]
     assert exported["config"]["client_id"] == "abc"
-    assert exported["secrets_excluded"] == ["client_secret"]
+    # Every secret-bearing OIDC field, not just the client secret: the DPoP
+    # signing key and the ID-token decryption key are private keys too.
+    assert exported["secrets_excluded"] == [
+        "client_secret",
+        "dpop_private_key",
+        "jwe_private_key",
+    ]
+    assert "dpop_private_key" not in exported["config"]
+    assert "jwe_private_key" not in exported["config"]
 
 
 def test_export_then_import_round_trips(admin_client, db, api_token, client):

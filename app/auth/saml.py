@@ -87,7 +87,12 @@ def build_saml_settings(connection: IdpConnection) -> dict[str, Any]:
             "authnRequestsSigned": settings.sign_authn_requests,
             "wantAssertionsSigned": settings.want_assertions_signed,
             "wantMessagesSigned": settings.want_response_signed,
-            "wantAssertionsEncrypted": False,
+            # Encryption needs the SP keypair: the IdP encrypts to our
+            # certificate and we decrypt with the private key. Requiring it
+            # without one configured produces a settings error rather than a
+            # confusing runtime failure, which is the better outcome.
+            "wantAssertionsEncrypted": settings.want_assertions_encrypted,
+            "wantNameIdEncrypted": settings.want_nameid_encrypted,
             "wantNameId": True,
             "requestedAuthnContext": requested_context,
             "rejectUnsolicitedResponsesWithInResponseTo": not settings.allow_unsolicited,
@@ -202,6 +207,11 @@ def process_response(
         attributes[name] = values[0] if isinstance(values, list) and len(values) == 1 else values
 
     claims: dict[str, Any] = dict(attributes)
+    # Whether the assertion really arrived encrypted. python3-saml enforces the
+    # requirement, but recording it means the dashboard can show that
+    # encryption was in play rather than leaving it to be assumed.
+    last_response = auth.get_last_response_xml() or ""
+    claims["_assertionEncrypted"] = "EncryptedAssertion" in last_response
     claims["nameId"] = auth.get_nameid()
     claims["nameIdFormat"] = auth.get_nameid_format()
     if auth.get_session_index():

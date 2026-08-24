@@ -312,6 +312,17 @@ class UserSession(Base):
     # Kept only to pass back as id_token_hint on federated sign-out, and as
     # SAML NameID/SessionIndex for a LogoutRequest. Not used for authorisation.
     id_token: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # Encrypted at rest with the same key that protects IdP client secrets: a
+    # refresh token is a long-lived credential, and storing it in the clear
+    # would be worse than not offering the feature. Only present when the
+    # connection asked for offline_access.
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # The DPoP key thumbprint the provider bound the tokens to, if any, so the
+    # dashboard can show binding without re-reading the token.
+    dpop_jkt: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # How many times this session's tokens have been refreshed.
+    refresh_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     name_id: Mapped[str] = mapped_column(String(320), nullable=False, default="")
     session_index: Mapped[str] = mapped_column(String(200), nullable=False, default="")
 

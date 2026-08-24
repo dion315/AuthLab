@@ -13,22 +13,23 @@ result, and burying it in a stack trace throws away the answer.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import events
 from app.auth import connections as conn
-from app.auth import expectations, flowstate, oidc, saml, scimlink
+from app.auth import dpop, expectations, flowstate, oidc, saml, scimlink, tokencrypto
 from app.auth.rolemap import resolve_role
 from app.config import get_settings
 from app.db import get_db
-from app.deps import current_session
+from app.deps import current_session, require_login
 from app.models import (
     PASSWORD_SOURCE_ENV,
     PASSWORD_SOURCE_GENERATED,
@@ -46,11 +47,15 @@ from app.security import (
     create_session,
     hash_password,
     needs_rehash,
+    read_refresh_token,
     revoke_session,
     revoke_sessions_for_user,
+    store_refresh_token,
     verify_password,
 )
 from app.templating import templates
+
+logger = logging.getLogger("authlab")
 
 router = APIRouter()
 
@@ -84,6 +89,32 @@ def _record_expectations(
     """Evaluate a connection's expectations and produce a log-friendly summary."""
     result = expectations.evaluate(connection, claims, role)
     return result, expectations.summarise(result)
+
+
+def tokens_binding(tokens: dict[str, Any], claims: dict[str, Any]) -> str:
+    """The DPoP thumbprint the provider bound these tokens to, if any.
+
+    The binding lives in the *access* token's `cnf.jkt`, which is not the token
+    this app validates — so it is read without verification, purely to display.
+    Nothing is authorised on the strength of it.
+    """
+    access_token = str(tokens.get("access_token", ""))
+    if access_token.count(".") == 2:
+        import base64
+        import json
+
+        try:
+            part = access_token.split(".")[1]
+            payload = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+            binding = dpop.binding_of(payload)
+            if binding:
+                return binding
+        except Exception:  # noqa: BLE001
+            # An opaque or oddly-shaped access token is normal, not an error:
+            # plenty of providers issue ones that are not JWTs at all. Fall
+            # through to the ID token, which may carry the confirmation instead.
+            logger.debug("Access token is not a readable JWT; reading cnf from the ID token")
+    return dpop.binding_of(claims)
 
 
 def _login_error(
@@ -391,7 +422,7 @@ async def oidc_callback(
         )
 
     try:
-        tokens = await oidc.exchange_code(
+        tokens, dpop_report = await oidc.exchange_code(
             connection, code=code, code_verifier=flow.get("code_verifier")
         )
         id_token = tokens.get("id_token", "")
@@ -401,7 +432,7 @@ async def oidc_callback(
                 "is included in the configured scopes.",
                 detail={"token_response_keys": sorted(tokens.keys())},
             )
-        claims = await oidc.validate_id_token(
+        claims, encryption = await oidc.validate_id_token(
             connection, id_token=id_token, nonce=flow.get("nonce", "")
         )
         if tokens.get("access_token"):
@@ -435,6 +466,10 @@ async def oidc_callback(
     checks, checks_summary = _record_expectations(connection, claims, role)
 
     target = safe_path(flow.get("return_to"))
+    # The access token carries the DPoP binding, not the ID token, so read the
+    # confirmation claim from whichever we have.
+    binding = tokens_binding(tokens, claims)
+
     response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
     flowstate.clear_flow(response, "oidc", slug)
     create_session(
@@ -449,6 +484,8 @@ async def oidc_callback(
         raw_claims=claims,
         request=request,
         id_token=id_token,
+        refresh_token=str(tokens.get("refresh_token", "")),
+        dpop_jkt=binding,
     )
     events.record(
         db,
@@ -470,6 +507,9 @@ async def oidc_callback(
             "role_trace": trace,
             "scim_groups": scim_groups,
             "expectations": checks,
+            "dpop": dpop_report,
+            "encryption": encryption,
+            "refresh_token_issued": bool(tokens.get("refresh_token")),
         },
     )
     return response
@@ -991,3 +1031,141 @@ def sync_local_admin(db: Session) -> AdminPasswordState:
         password=password,
         changed=True,
     )
+
+
+# --- OIDC: refresh and published keys ----------------------------------------
+
+
+@router.post("/auth/oidc/{slug}/refresh")
+async def oidc_refresh(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: UserSession = Depends(require_login),
+) -> Response:
+    """Exchange this session's refresh token for a fresh set of tokens.
+
+    Worth doing deliberately rather than in the background, because a refresh is
+    the one path that extends access *without* a new authentication. Running it
+    on demand is how you find out whether your provider re-evaluates
+    Conditional Access at refresh time or only at sign-in, and whether it
+    rotates the refresh token on use.
+
+    The session's claims are replaced with the ones the new token carries, so
+    the dashboard afterwards shows what the provider asserts *now* — which is
+    the comparison worth making.
+    """
+    connection = conn.get_by_slug(db, session.source)
+    if connection is None or connection.protocol != "oidc":
+        return _login_error(
+            request,
+            title="Not a refreshable session",
+            message="This session did not come from an OIDC connection.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    stored = read_refresh_token(session)
+    try:
+        tokens, dpop_report = await oidc.refresh_tokens(connection, refresh_token=stored)
+        id_token = tokens.get("id_token", "")
+        claims = session.raw_claims or {}
+        encryption: dict[str, Any] = {}
+        if id_token:
+            claims, encryption = await oidc.validate_id_token(
+                connection, id_token=id_token, nonce=""
+            )
+    except oidc.OidcError as exc:
+        events.record(
+            db,
+            kind="token_refresh",
+            outcome="denied" if exc.code else "error",
+            summary=f"Refresh failed: {exc.description or exc.message}",
+            request=request,
+            connection_slug=slug,
+            protocol="oidc",
+            subject=session.subject,
+            detail={"code": exc.code, "description": exc.description, **exc.detail},
+        )
+        return _login_error(
+            request,
+            title="Refresh was refused",
+            message=exc.description or exc.message,
+            detail={"error": exc.code, **exc.detail} if exc.code else exc.detail,
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    settings_obj = conn.load_settings(connection)
+    rotated = str(tokens.get("refresh_token", ""))
+    if rotated and getattr(settings_obj, "store_rotated_refresh_token", True):
+        # Providers that rotate on use invalidate the old token immediately;
+        # dropping the replacement silently breaks the next refresh.
+        store_refresh_token(db, session, rotated)
+
+    role, trace, scim_groups = _post_login_role(db, connection, claims)
+    checks, checks_summary = _record_expectations(connection, claims, role)
+
+    session.raw_claims = claims
+    if id_token:
+        session.id_token = id_token
+    session.dpop_jkt = tokens_binding(tokens, claims) or session.dpop_jkt
+    session.refresh_count = (session.refresh_count or 0) + 1
+    db.commit()
+
+    events.record(
+        db,
+        kind="token_refresh",
+        outcome="ok" if checks.get("passed") is not False else "denied",
+        summary=" · ".join(
+            part
+            for part in (
+                f"Refreshed tokens via {connection.name}",
+                "rotated" if rotated else "same refresh token returned",
+                checks_summary,
+            )
+            if part
+        ),
+        request=request,
+        connection_slug=slug,
+        protocol="oidc",
+        subject=session.subject,
+        detail={
+            "role": role,
+            "role_trace": trace,
+            "scim_groups": scim_groups,
+            "expectations": checks,
+            "dpop": dpop_report,
+            "encryption": encryption,
+            "refresh_token_rotated": bool(rotated),
+            "refresh_count": session.refresh_count,
+        },
+    )
+    return RedirectResponse(
+        "/dashboard?message=Tokens+refreshed", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@router.get("/auth/oidc/{slug}/jwks.json")
+def oidc_jwks(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """The public key a provider encrypts ID tokens to.
+
+    Clients publishing a key set is the surprising half of encrypted ID tokens:
+    the provider fetches this URL and uses the key to encrypt. Register it at
+    the provider as the client's jwks_uri.
+
+    Public keys only, and never the DPoP key — that one is proved by use rather
+    than published.
+    """
+    connection = conn.get_by_slug(db, slug)
+    if connection is None or connection.protocol != "oidc":
+        return JSONResponse(status_code=404, content={"keys": []})
+
+    settings_obj = conn.load_settings(connection)
+    if not getattr(settings_obj, "accept_encrypted_id_token", False):
+        # An empty set is the correct answer rather than a 404: the endpoint
+        # exists for this connection, it simply publishes nothing right now.
+        return JSONResponse(content={"keys": []})
+
+    try:
+        return JSONResponse(content=tokencrypto.public_jwks(settings_obj.jwe_private_key))
+    except tokencrypto.TokenCryptoError:
+        return JSONResponse(content={"keys": []})

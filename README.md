@@ -40,6 +40,7 @@ and prints a generated administrator password to the log on first run.
 - [SCIM provisioning](#scim-provisioning)
 - [Testing Conditional Access](#testing-conditional-access)
 - [Step-up and authentication contexts](#step-up-and-authentication-contexts)
+- [Token security](#token-security)
 - [Service and API access](#service-and-api-access)
 - [The automation API](#the-automation-api)
 - [Deploying](#deploying)
@@ -161,6 +162,8 @@ app/
     lifetimes.py      Decoding token time claims against our own session
     oidc.py           Discovery, PKCE, token exchange, ID token validation
     apitoken.py       Access token validation — the resource-server side
+    dpop.py           DPoP proofs and token binding (RFC 9449)
+    tokencrypto.py    Encrypted ID tokens, and the JWKS the app publishes
     saml.py           SP metadata, AuthnRequest, assertions, single logout
     flowstate.py      Signed short-lived cookies carrying in-flight login state
     router.py         Sign-in, sign-out, callbacks, SLS
@@ -185,7 +188,7 @@ app/
 
 docs/                 Per-provider setup, and URLs/reachability
 terraform/            Azure, AWS, and GCP modules
-tests/                348 tests
+tests/                385 tests
 ```
 
 A few decisions your developers may find worth copying:
@@ -457,6 +460,46 @@ discarded rather than parsed and normalised.
 
 ---
 
+## Token security
+
+Four things a provider can be configured to do that it may then quietly not do.
+Each is off by default, each needs matching configuration at the provider, and
+each is reported rather than assumed.
+
+**DPoP — sender-constrained tokens (RFC 9449).** The app signs a proof of
+possession into a `DPoP` header on every token request; the provider binds the
+access token to that key's thumbprint in `cnf.jkt`. A stolen token is then
+useless without the key. The dashboard shows the thumbprint we signed with next
+to the one in the token, so binding either happened or it did not. The nonce
+round trip — a server rejecting the first proof with `use_dpop_nonce` and a
+`DPoP-Nonce` header — is handled and recorded rather than treated as a failure.
+
+**Encrypted ID tokens (JWE).** Turn it on and the app publishes an encryption
+key at `/auth/oidc/{slug}/jwks.json` for the provider to fetch and encrypt to.
+The client publishing a key set is the part people find surprising. Support is
+uneven — Okta and Ping offer it, Entra does not for OIDC, and several providers
+accept the setting and send plaintext anyway. A plain signed token is still
+accepted, and the dashboard says which actually arrived, because "the provider
+ignored my request" is more useful than a parse error.
+
+**Refresh tokens.** Adds `offline_access`, stores the refresh token encrypted
+with the same key that protects IdP client secrets, and puts a **Refresh the
+tokens** action on the dashboard. Worth running deliberately: a refresh is the
+one path that extends access *without* a new authentication, so it is how you
+find out whether your provider re-evaluates Conditional Access at refresh time
+or only at sign-in. The claims are replaced with whatever comes back, so you can
+compare. Rotation is handled, and can be disabled on purpose to watch a replayed
+refresh token get rejected.
+
+**Encrypted SAML assertions.** `want_assertions_encrypted` and
+`want_nameid_encrypted`, decrypted with the SP private key. Enabling one side
+only produces a rejected assertion rather than a silent downgrade.
+
+Claims themselves stay configurable throughout: the `claims` request parameter
+demands specific claims or an authentication context, everything that arrives is
+listed in full on the dashboard, and expectations turn any of them into a
+pass/fail.
+
 ## Service and API access
 
 **Admin → Service access** is the resource-server half of OAuth — the part no
@@ -637,14 +680,16 @@ pytest tests -q
 ruff check app tests
 ```
 
-348 tests, covering the SCIM request shapes real connectors send (including the
+385 tests, covering the SCIM request shapes real connectors send (including the
 two Entra quirks above), the filter parser, role mapping from both claims and
 SCIM groups, expectation evaluation, session revocation across mismatched
 identifiers, access token validation, the automation API and its scopes, schema
 reconciliation, the open-redirect guard, authorisation guards, output escaping,
 secret encryption, administrator password reconciliation across restarts,
 SCIM's independence from both SSO protocols, Entra NameID stability, the
-consistency of the provider guides, and that every page renders.
+consistency of the provider guides, DPoP proof construction and token
+binding, ID token encryption, refresh scope handling, and that every page
+renders.
 
 ---
 

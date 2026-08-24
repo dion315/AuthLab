@@ -202,6 +202,85 @@
 </div>
 {% endif %}
 
+{% if token_security.relevant %}
+<div class="card">
+  <h3>Token security</h3>
+
+  {% if token_security.dpop_configured %}
+  <div class="table-scroll">
+    <table>
+      <tr><th></th><th>Proof of possession</th><th>Detail</th></tr>
+      <tr class="claim-row">
+        <td>
+          {% if token_security.binding.bound %}<span class="trace-match">bound</span>
+          {% else %}<span class="check-fail">not bound</span>{% endif %}
+        </td>
+        <td class="mono">cnf.jkt</td>
+        <td class="muted small">{{ token_security.binding.detail }}</td>
+      </tr>
+      <tr class="claim-row">
+        <td></td><td class="mono">our key</td>
+        <td class="mono">{{ token_security.binding.expected or '—' }}</td>
+      </tr>
+      <tr class="claim-row">
+        <td></td><td class="mono">in the token</td>
+        <td class="mono">{{ token_security.binding.actual or '(none)' }}</td>
+      </tr>
+    </table>
+  </div>
+  <p class="field-help">
+    DPoP binds the token to a key this app holds. Matching thumbprints mean a
+    copy of the token, on its own, cannot be used by anyone else.
+  </p>
+  {% endif %}
+
+  {% if token_security.encryption_configured %}
+  <p class="muted small">
+    ID token encryption:
+    {% if token_security.encrypted %}
+    <span class="trace-match">the token arrived encrypted</span>
+    {% else %}
+    <span class="check-fail">requested, but the token arrived unencrypted</span>
+    — the provider accepted the setting and ignored it, which is common. Check
+    that the client's <code>jwks_uri</code> is registered and that an ID token
+    encryption algorithm is selected at the provider.
+    {% endif %}
+  </p>
+  {% endif %}
+
+  {% if token_security.saml_encrypted is not none %}
+  <p class="muted small">
+    SAML assertion:
+    {% if token_security.saml_encrypted %}<span class="trace-match">arrived encrypted</span>
+    {% else %}<span class="muted">arrived in plaintext</span>{% endif %}
+  </p>
+  {% endif %}
+
+  {% if token_security.refresh_available %}
+  <p class="muted small">
+    A refresh token was issued for this session.
+    {% if session.refresh_count %}Refreshed {{ session.refresh_count }} time(s) so far.{% endif %}
+  </p>
+  <form method="post" action="/auth/oidc/{{ connection.slug }}/refresh" class="btn-row">
+    <button type="submit">Refresh the tokens</button>
+  </form>
+  <p class="field-help">
+    A refresh extends access without a new authentication, which is exactly why
+    it is worth running deliberately: it is how you find out whether your
+    provider re-evaluates Conditional Access at refresh time or only at
+    sign-in. The claims below are replaced with whatever comes back, so compare
+    before and after.
+  </p>
+  {% elif token_security.refresh_requested %}
+  <p class="muted small">
+    This connection requests a refresh token, but none was issued. The provider
+    has to allow <code>offline_access</code> and the refresh_token grant for
+    this client.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if stepup.configured %}
 <div class="card">
   <h3>

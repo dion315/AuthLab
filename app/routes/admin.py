@@ -274,6 +274,7 @@ def edit_connection_form(
         "acs_url": conn.acs_url(connection.slug),
         "sls_url": conn.sls_url(connection.slug),
         "export_url": f"/admin/connections/{connection.id}/export",
+        "jwks_url": f"{get_settings().base_url.rstrip('/')}/auth/oidc/{connection.slug}/jwks.json",
         "metadata_url": conn.metadata_url(connection.slug),
         "login_url": f"/auth/{connection.protocol}/{connection.slug}/login",
     }

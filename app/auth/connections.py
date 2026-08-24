@@ -53,6 +53,22 @@ def store_settings(connection: IdpConnection, data: dict[str, Any]) -> None:
 
     validated = model(**merged).model_dump()
 
+    # Keys the app owns rather than the operator. Generated the first time the
+    # feature is enabled and kept afterwards, so a connection's DPoP thumbprint
+    # and published encryption key stay stable across edits — a changing
+    # cnf.jkt would be indistinguishable from the provider misbehaving.
+    if protocol == "oidc":
+        if validated.get("use_dpop") and not decrypt(existing.get("dpop_private_key")):
+            from app.auth import dpop as _dpop
+
+            validated["dpop_private_key"] = _dpop.generate_key()
+        if validated.get("accept_encrypted_id_token") and not decrypt(
+            existing.get("jwe_private_key")
+        ):
+            from app.auth import tokencrypto as _tokencrypto
+
+            validated["jwe_private_key"] = _tokencrypto.generate_key()
+
     for field in secrets_for_protocol:
         value = validated.get(field)
         if value and not is_encrypted(value):

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app import events
 from app.auth import connections as conn
-from app.auth import expectations, lifetimes, scimlink
+from app.auth import dpop, expectations, lifetimes, scimlink
 from app.auth.rolemap import describe_claim_lookup, resolve_role
 from app.db import get_db
 from app.deps import current_session, require_login
@@ -112,6 +112,8 @@ def dashboard(
     stepup: dict[str, Any] = {"configured": False, "satisfied": False}
     current_role = session.role
 
+    token_security = describe_token_security(db, session, connection)
+
     if connection is not None:
         scim_link = scimlink.describe(db, session)
         scim_groups = scim_link.get("groups", [])
@@ -139,6 +141,7 @@ def dashboard(
             "scim_link": scim_link,
             "checks": checks,
             "stepup": stepup,
+            "token_security": token_security,
             "lifetimes": lifetimes.describe(claims, session),
             "session_outlives_token": lifetimes.outlives_token(claims, session),
             "role_drifted": current_role != session.role,
@@ -147,6 +150,75 @@ def dashboard(
             "message": request.query_params.get("message", ""),
         },
     )
+
+
+def describe_token_security(db: Session, session: UserSession, connection: Any) -> dict[str, Any]:
+    """What the dashboard needs to say about DPoP, encryption, and refresh.
+
+    All of it is reporting rather than enforcement: whether the provider bound
+    the token to our key, whether an encrypted token was actually encrypted,
+    and whether a refresh token exists to exercise. Each is a thing that can be
+    configured on both sides and still silently not happen, which is precisely
+    why it is worth showing rather than assuming.
+    """
+    claims = session.raw_claims or {}
+    result: dict[str, Any] = {
+        "relevant": False,
+        "dpop_configured": False,
+        "encryption_configured": False,
+        "encrypted": False,
+        "refresh_available": False,
+        "refresh_requested": False,
+        "saml_encrypted": None,
+        "binding": {},
+    }
+
+    if session.protocol == "saml":
+        if "_assertionEncrypted" in claims:
+            result["saml_encrypted"] = bool(claims["_assertionEncrypted"])
+            result["relevant"] = True
+        return result
+
+    if connection is None or connection.protocol != "oidc":
+        return result
+
+    settings_obj = conn.load_settings(connection)
+
+    if getattr(settings_obj, "use_dpop", False):
+        result["dpop_configured"] = True
+        result["relevant"] = True
+        result["binding"] = {
+            "bound": bool(session.dpop_jkt)
+            and session.dpop_jkt == dpop.thumbprint(settings_obj.dpop_private_key),
+            "expected": dpop.thumbprint(settings_obj.dpop_private_key)
+            if settings_obj.dpop_private_key
+            else "",
+            "actual": session.dpop_jkt,
+            "detail": (
+                "The token is bound to this connection's key and cannot be replayed without it."
+                if session.dpop_jkt
+                else "No cnf.jkt came back, so the provider issued an ordinary bearer "
+                "token and ignored the proof. DPoP usually has to be enabled on the "
+                "client at the provider as well as requested here."
+            ),
+        }
+
+    if getattr(settings_obj, "accept_encrypted_id_token", False):
+        result["encryption_configured"] = True
+        result["relevant"] = True
+        # Recorded on the sign-in event rather than the session, so read it back.
+        latest = events.recent(db, limit=50, kind="login_success")
+        for event in latest:
+            if event.connection_slug == connection.slug:
+                result["encrypted"] = bool((event.detail or {}).get("encryption", {}).get("encrypted"))
+                break
+
+    if getattr(settings_obj, "request_refresh_token", False):
+        result["refresh_requested"] = True
+        result["relevant"] = True
+        result["refresh_available"] = bool(session.refresh_token)
+
+    return result
 
 
 @router.get("/api/weather")

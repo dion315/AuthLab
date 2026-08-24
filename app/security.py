@@ -15,6 +15,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.crypto import decrypt, encrypt
 from app.models import UserSession
 
 _hasher = PasswordHasher()
@@ -118,6 +119,8 @@ def create_session(
     id_token: str = "",
     name_id: str = "",
     session_index: str = "",
+    refresh_token: str = "",
+    dpop_jkt: str = "",
 ) -> UserSession:
     settings = get_settings()
     now = datetime.now(UTC)
@@ -131,6 +134,10 @@ def create_session(
         protocol=protocol,
         raw_claims=raw_claims,
         id_token=id_token,
+        # Encrypted with the same key that protects stored IdP secrets — a
+        # refresh token outlives the session it came from.
+        refresh_token=encrypt(refresh_token) or "",
+        dpop_jkt=dpop_jkt,
         name_id=name_id,
         session_index=session_index,
         created_at=now,
@@ -238,3 +245,14 @@ def revoke_sessions_for_user(db: Session, *identifiers: str | None) -> int:
 def clear_session_cookie(response: Response) -> None:
     settings = get_settings()
     response.delete_cookie(settings.session_cookie_name, path="/")
+
+
+def read_refresh_token(session: UserSession) -> str:
+    """The stored refresh token, decrypted. "" when there is none."""
+    return decrypt(session.refresh_token) or ""
+
+
+def store_refresh_token(db: Session, session: UserSession, token: str) -> None:
+    """Replace the stored refresh token after a rotation."""
+    session.refresh_token = encrypt(token) or ""
+    db.commit()

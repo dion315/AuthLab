@@ -186,6 +186,16 @@ ENTRA = Provider(
                     ),
                 ),
                 Step(
+                    title="Optional — refresh tokens",
+                    body=(
+                        "Add `offline_access` to the app registration's API permissions, then tick "
+                        "**Request a refresh token** here. Entra does not support encrypted ID "
+                        "tokens or DPoP for OIDC clients, so those two options will have no effect "
+                        "against Entra — the dashboard will report the token as unbound and "
+                        "unencrypted, which in this case is the provider and not your setup."
+                    ),
+                ),
+                Step(
                     title="Check it before signing in",
                     body=(
                         "Save the connection and press **Test configuration**. It fetches the discovery "
@@ -323,6 +333,17 @@ ENTRA = Provider(
                     ),
                 ),
                 Step(
+                    title="Optional — encrypt the assertion",
+                    body=(
+                        "Entra can encrypt the SAML assertion. Generate an SP keypair, paste the "
+                        "certificate and private key into this connection, upload the same "
+                        "certificate under **Token encryption** on the enterprise application and "
+                        "activate it, then tick **Require the assertion to be encrypted** here. "
+                        "Both sides must be configured — enabling only one gives you a rejected "
+                        "assertion rather than a silent downgrade, which is the intended outcome."
+                    ),
+                ),
+                Step(
                     title="Assign someone",
                     body=(
                         "Under Users and groups, assign at least one user. Entra refuses sign-in for "
@@ -448,7 +469,13 @@ OKTA = Provider(
                 Term(
                     key="client_secret",
                     their_name="CLIENT SECRETS → Secret",
-                    where="Applications → your app → General",
+                    where="Applications → your app → General → Client Credentials",
+                    note=(
+                        "Only exists on a **Web Application**. If the General tab shows \"Client "
+                        "authentication: None\" and there is no CLIENT SECRETS section, the app was "
+                        "created as a SPA or Native integration and no secret can be produced for it. "
+                        "Unlike Entra, Okta lets you view the secret again later."
+                    ),
                 ),
                 Term(
                     key="scopes",
@@ -465,10 +492,13 @@ OKTA = Provider(
             ),
             steps=(
                 Step(
-                    title="Create the app integration",
+                    title="Create the app integration — choose Web Application",
                     body=(
-                        "Applications → Create App Integration → **OIDC - OpenID Connect** → **Web "
-                        "Application**."
+                        "Applications → Create App Integration → **OIDC - OpenID Connect**, then pick "
+                        "**Web Application** as the application type. Get this right first: it decides "
+                        "whether the app can hold a client secret, and Okta will not let you change it "
+                        "afterwards. If you have already made a Single-Page Application, see the "
+                        "warnings below."
                     ),
                 ),
                 Step(
@@ -507,8 +537,63 @@ OKTA = Provider(
                     title="Assign people",
                     body="Under Assignments, assign the users or groups who should be able to sign in.",
                 ),
+                Step(
+                    title="Optional — refresh tokens",
+                    body=(
+                        "To exercise refresh, tick **Refresh Token** under Grant type on the app, "
+                        "make sure the `offline_access` scope is available on the authorization "
+                        "server, then enable **Request a refresh token** here. Okta's refresh token "
+                        "rotation setting is on the app's General tab; with rotation on, each "
+                        "refresh returns a replacement and invalidates the previous one."
+                    ),
+                ),
+                Step(
+                    title="Optional — DPoP",
+                    body=(
+                        "Okta supports sender-constrained tokens. Enable **Proof of possession: "
+                        "Require Demonstrating Proof of Possession (DPoP) header** on the "
+                        "application's General tab, then tick **Use DPoP** here. Sign in and the "
+                        "dashboard will show whether the access token came back carrying a "
+                        "`cnf.jkt` matching this connection's key."
+                    ),
+                ),
+                Step(
+                    title="Optional — encrypted ID tokens",
+                    body=(
+                        "Tick **Accept encrypted ID tokens** here, copy the JWKS URL it then "
+                        "shows, and register it as the client's JWKS on the Okta app. Okta "
+                        "encrypts to the key it finds there. If tokens keep arriving "
+                        "unencrypted, the dashboard says so — it usually means the JWKS URL is "
+                        "not registered or is unreachable from Okta."
+                    ),
+                ),
+                Step(
+                    title="Optional — custom claims",
+                    body=(
+                        "Any claim you add on the authorization server (Security → API → your "
+                        "server → Claims) arrives in the token and is listed in full on the "
+                        "dashboard. To *demand* one rather than hope for it, put a claims request "
+                        "in the connection's `claims` field, and add an expectation so each "
+                        "sign-in reports pass or fail on it."
+                    ),
+                ),
             ),
             gotchas=(
+                (
+                    "**Choose Web Application, not Single-Page Application.** This is the one that "
+                    "catches people: SPA sounds like the modern default and the wizard offers it "
+                    "prominently. A SPA is a *public* client, so Okta shows \"Client authentication: "
+                    "None\" on the General tab, there is no CLIENT SECRETS section, and no secret "
+                    "exists to copy. Web Application is a confidential client and is what these steps "
+                    "assume. The type cannot be changed after creation — delete the integration and "
+                    "create a new one."
+                ),
+                (
+                    "If you would rather keep a SPA integration, it can still work: leave Client "
+                    "secret blank here and keep **Use PKCE** ticked, which is a legitimate "
+                    "public-client flow. You lose the client-credentials grant, so that connection "
+                    "cannot be used on the Service access page."
+                ),
                 (
                     "The groups claim lives on the **authorization server**, not on the application. Adding "
                     "a "
